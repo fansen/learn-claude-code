@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # Harness: planning -- keep the current session plan outside the model's head.
 """
-s03_todo_write.py - Session Planning with TodoWrite
+s03_todo_write.py - 会话规划（TodoWrite）
 
-This chapter is about a lightweight session plan, not a durable task graph.
-The model can rewrite its current plan, keep one active step in focus, and get
-nudged if it stops refreshing the plan for too many rounds.
+本章讲的是轻量级的会话计划，不是持久化的任务图。
+模型可以重写当前计划、聚焦一个进行中的步骤，
+如果连续多轮没有刷新计划，harness 会提醒它。
 """
 
 import os
@@ -24,6 +24,7 @@ if os.getenv("ANTHROPIC_BASE_URL"):
 WORKDIR = Path.cwd()
 client = Anthropic(base_url=os.getenv("ANTHROPIC_BASE_URL"))
 MODEL = os.environ["MODEL_ID"]
+# 连续多少轮没更新计划就触发提醒
 PLAN_REMINDER_INTERVAL = 3
 
 SYSTEM = f"""You are a coding agent at {WORKDIR}.
@@ -34,22 +35,27 @@ Refresh the plan as work advances. Prefer tools over prose."""
 
 @dataclass
 class PlanItem:
-    content: str
-    status: str = "pending"
-    active_form: str = ""
+    """计划中的单个步骤。"""
+    content: str                    # 步骤描述
+    status: str = "pending"         # pending / in_progress / completed
+    active_form: str = ""           # 进行中时的现在进行时标签（可选）
 
 
 @dataclass
 class PlanningState:
+    """计划的整体状态。"""
     items: list[PlanItem] = field(default_factory=list)
-    rounds_since_update: int = 0
+    rounds_since_update: int = 0    # 距离上次更新计划过了多少轮
 
 
 class TodoManager:
+    """管理会话计划的增删改查和提醒逻辑。"""
+
     def __init__(self):
         self.state = PlanningState()
 
     def update(self, items: list) -> str:
+        """用新的计划项列表完整替换当前计划（全量覆盖，不是增量）。"""
         if len(items) > 12:
             raise ValueError("Keep the session plan short (max 12 items)")
 
@@ -73,6 +79,7 @@ class TodoManager:
                 active_form=active_form,
             ))
 
+        # 同一时间只能有一个步骤处于进行中
         if in_progress_count > 1:
             raise ValueError("Only one plan item can be in_progress")
 
@@ -81,9 +88,11 @@ class TodoManager:
         return self.render()
 
     def note_round_without_update(self) -> None:
+        """记录一轮没有更新计划。"""
         self.state.rounds_since_update += 1
 
     def reminder(self) -> str | None:
+        """如果连续多轮没刷新计划，返回提醒文本；否则返回 None。"""
         if not self.state.items:
             return None
         if self.state.rounds_since_update < PLAN_REMINDER_INTERVAL:
@@ -91,6 +100,7 @@ class TodoManager:
         return "<reminder>Refresh your current plan before continuing.</reminder>"
 
     def render(self) -> str:
+        """把当前计划渲染成可读文本。"""
         if not self.state.items:
             return "No session plan yet."
 
@@ -115,6 +125,7 @@ TODO = TodoManager()
 
 
 def safe_path(path_str: str) -> Path:
+    """路径安全校验：确保路径不会逃逸出工作区。"""
     path = (WORKDIR / path_str).resolve()
     if not path.is_relative_to(WORKDIR):
         raise ValueError(f"Path escapes workspace: {path_str}")
@@ -122,6 +133,7 @@ def safe_path(path_str: str) -> Path:
 
 
 def run_bash(command: str) -> str:
+    """执行 shell 命令，带危险命令拦截和超时保护。"""
     dangerous = ["rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"]
     if any(item in command for item in dangerous):
         return "Error: Dangerous command blocked"
@@ -142,6 +154,7 @@ def run_bash(command: str) -> str:
 
 
 def run_read(path: str, limit: int | None = None) -> str:
+    """读取文件内容，可选限制行数。"""
     try:
         lines = safe_path(path).read_text().splitlines()
         if limit and limit < len(lines):
@@ -152,6 +165,7 @@ def run_read(path: str, limit: int | None = None) -> str:
 
 
 def run_write(path: str, content: str) -> str:
+    """写入文件，自动创建父目录。"""
     try:
         file_path = safe_path(path)
         file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -162,6 +176,7 @@ def run_write(path: str, content: str) -> str:
 
 
 def run_edit(path: str, old_text: str, new_text: str) -> str:
+    """精确替换文件中的文本（只替换第一个匹配）。"""
     try:
         file_path = safe_path(path)
         content = file_path.read_text()
@@ -173,6 +188,7 @@ def run_edit(path: str, old_text: str, new_text: str) -> str:
         return f"Error: {exc}"
 
 
+# 工具分发表
 TOOL_HANDLERS = {
     "bash": lambda **kw: run_bash(kw["command"]),
     "read_file": lambda **kw: run_read(kw["path"], kw.get("limit")),
@@ -181,6 +197,7 @@ TOOL_HANDLERS = {
     "todo": lambda **kw: TODO.update(kw["items"]),
 }
 
+# 工具定义列表（JSON Schema 格式）
 TOOLS = [
     {
         "name": "bash",
@@ -260,6 +277,7 @@ TOOLS = [
 
 
 def extract_text(content) -> str:
+    """从模型回复的 content 列表中提取所有文本块。"""
     if not isinstance(content, list):
         return ""
     texts = []
@@ -271,6 +289,7 @@ def extract_text(content) -> str:
 
 
 def agent_loop(messages: list) -> None:
+    """核心循环：调模型 → 执行工具 → 喂回结果，直到模型不再调用工具。"""
     while True:
         response = client.messages.create(
             model=MODEL,
@@ -305,17 +324,20 @@ def agent_loop(messages: list) -> None:
             if block.name == "todo":
                 used_todo = True
 
+        # 计划提醒逻辑：如果这轮没用 todo 工具，累计轮次；超过阈值就插入提醒
         if used_todo:
             TODO.state.rounds_since_update = 0
         else:
             TODO.note_round_without_update()
             reminder = TODO.reminder()
             if reminder:
+                # 把提醒插到 tool_result 前面，让模型先看到提醒
                 results.insert(0, {"type": "text", "text": reminder})
 
         messages.append({"role": "user", "content": results})
 
 
+# ===== 入口：交互式 REPL =====
 if __name__ == "__main__":
     history = []
     while True:

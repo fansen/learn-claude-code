@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 # Harness: tool dispatch -- expanding what the model can reach.
 """
-s02_tool_use.py - Tool dispatch + message normalization
+s02_tool_use.py - 工具分发 + 消息规范化
 
-The agent loop from s01 didn't change. We added tools to the dispatch map,
-and a normalize_messages() function that cleans up the message list before
-each API call.
+s01 的 agent loop 没有变。我们只是往分发表里加了工具，
+并新增了一个 normalize_messages() 函数，在每次 API 调用前清理消息列表。
 
-Key insight: "The loop didn't change at all. I just added tools."
+核心洞察："循环压根没变，我只是加了工具。"
 """
 
 import os
@@ -30,6 +29,7 @@ SYSTEM = f"You are a coding agent at {WORKDIR}. Use tools to solve tasks. Act, d
 
 
 def safe_path(p: str) -> Path:
+    """路径安全校验：确保路径不会逃逸出工作区。"""
     path = (WORKDIR / p).resolve()
     if not path.is_relative_to(WORKDIR):
         raise ValueError(f"Path escapes workspace: {p}")
@@ -37,6 +37,7 @@ def safe_path(p: str) -> Path:
 
 
 def run_bash(command: str) -> str:
+    """执行 shell 命令，带危险命令拦截和超时保护。"""
     dangerous = ["rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"]
     if any(d in command for d in dangerous):
         return "Error: Dangerous command blocked"
@@ -51,6 +52,7 @@ def run_bash(command: str) -> str:
 
 
 def run_read(path: str, limit: int = None) -> str:
+    """读取文件内容，可选限制行数。"""
     try:
         text = safe_path(path).read_text()
         lines = text.splitlines()
@@ -62,6 +64,7 @@ def run_read(path: str, limit: int = None) -> str:
 
 
 def run_write(path: str, content: str) -> str:
+    """写入文件，自动创建父目录。"""
     try:
         fp = safe_path(path)
         fp.parent.mkdir(parents=True, exist_ok=True)
@@ -72,6 +75,7 @@ def run_write(path: str, content: str) -> str:
 
 
 def run_edit(path: str, old_text: str, new_text: str) -> str:
+    """精确替换文件中的文本（只替换第一个匹配）。"""
     try:
         fp = safe_path(path)
         content = fp.read_text()
@@ -83,19 +87,20 @@ def run_edit(path: str, old_text: str, new_text: str) -> str:
         return f"Error: {e}"
 
 
-# -- Concurrency safety classification --
-# Read-only tools can safely run in parallel; mutating tools must be serialized.
+# -- 并发安全分类 --
+# 只读工具可以安全地并行执行；写入工具必须串行
 CONCURRENCY_SAFE = {"read_file"}
 CONCURRENCY_UNSAFE = {"write_file", "edit_file"}
 
-# -- The dispatch map: {tool_name: handler} --
+# -- 工具分发表：{工具名: 处理函数} --
 TOOL_HANDLERS = {
-    "bash":       lambda **kw: run_bash(kw["command"]),
-    "read_file":  lambda **kw: run_read(kw["path"], kw.get("limit")),
+    "bash": lambda **kw: run_bash(kw["command"]),
+    "read_file": lambda **kw: run_read(kw["path"], kw.get("limit")),
     "write_file": lambda **kw: run_write(kw["path"], kw["content"]),
-    "edit_file":  lambda **kw: run_edit(kw["path"], kw["old_text"], kw["new_text"]),
+    "edit_file": lambda **kw: run_edit(kw["path"], kw["old_text"], kw["new_text"]),
 }
 
+# 工具定义列表（JSON Schema 格式），传给模型让它知道有哪些工具可用
 TOOLS = [
     {"name": "bash", "description": "Run a shell command.",
      "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
@@ -104,17 +109,18 @@ TOOLS = [
     {"name": "write_file", "description": "Write content to file.",
      "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}},
     {"name": "edit_file", "description": "Replace exact text in file.",
-     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path", "old_text", "new_text"]}},
+     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}},
+                      "required": ["path", "old_text", "new_text"]}},
 ]
 
 
 def normalize_messages(messages: list) -> list:
-    """Clean up messages before sending to the API.
+    """在发送给 API 之前清理消息列表。
 
-    Three jobs:
-    1. Strip internal metadata fields the API doesn't understand
-    2. Ensure every tool_use has a matching tool_result (insert placeholder if missing)
-    3. Merge consecutive same-role messages (API requires strict alternation)
+    三件事：
+    1. 剥离 API 不认识的内部元数据字段（以 _ 开头的键）
+    2. 确保每个 tool_use 都有对应的 tool_result（缺失的补占位符）
+    3. 合并连续同角色的消息（API 要求严格交替）
     """
     cleaned = []
     for msg in messages:
@@ -122,6 +128,7 @@ def normalize_messages(messages: list) -> list:
         if isinstance(msg.get("content"), str):
             clean["content"] = msg["content"]
         elif isinstance(msg.get("content"), list):
+            # 过滤掉以 _ 开头的内部元数据字段
             clean["content"] = [
                 {k: v for k, v in block.items()
                  if not k.startswith("_")}
@@ -132,7 +139,7 @@ def normalize_messages(messages: list) -> list:
             clean["content"] = msg.get("content", "")
         cleaned.append(clean)
 
-    # Collect existing tool_result IDs
+    # 收集已有的 tool_result ID
     existing_results = set()
     for msg in cleaned:
         if isinstance(msg.get("content"), list):
@@ -140,7 +147,7 @@ def normalize_messages(messages: list) -> list:
                 if isinstance(block, dict) and block.get("type") == "tool_result":
                     existing_results.add(block.get("tool_use_id"))
 
-    # Find orphaned tool_use blocks and insert placeholder results
+    # 找到没有对应 result 的孤立 tool_use，补一个占位 result
     for msg in cleaned:
         if msg["role"] != "assistant" or not isinstance(msg.get("content"), list):
             continue
@@ -153,7 +160,7 @@ def normalize_messages(messages: list) -> list:
                      "content": "(cancelled)"}
                 ]})
 
-    # Merge consecutive same-role messages
+    # 合并连续同角色消息（API 要求 user/assistant 严格交替）
     if not cleaned:
         return cleaned
     merged = [cleaned[0]]
@@ -171,15 +178,25 @@ def normalize_messages(messages: list) -> list:
 
 
 def agent_loop(messages: list):
+    """核心循环：调模型 → 执行工具 → 喂回结果，直到模型不再调用工具。"""
     while True:
+        # 1. 调用模型，传入完整对话历史 + 可用工具列表
         response = client.messages.create(
-            model=MODEL, system=SYSTEM,
+            model=MODEL,
+            system=SYSTEM,
             messages=normalize_messages(messages),
-            tools=TOOLS, max_tokens=8000,
+            tools=TOOLS,
+            max_tokens=8000,
         )
+        # 2. 把模型的回复追加到对话历史（保持上下文完整）
         messages.append({"role": "assistant", "content": response.content})
+
+        # 3. 如果模型没有调用工具，说明它已经给出了最终回答，退出循环
         if response.stop_reason != "tool_use":
             return
+
+        # 4. 执行所有工具调用
+        # 遍历模型回复，通过分发表执行所有工具调用
         results = []
         for block in response.content:
             if block.type == "tool_use":
@@ -188,9 +205,11 @@ def agent_loop(messages: list):
                 print(f"> {block.name}:")
                 print(output[:200])
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": output})
+
         messages.append({"role": "user", "content": results})
 
 
+# ===== 入口：交互式 REPL =====
 if __name__ == "__main__":
     history = []
     while True:
@@ -202,6 +221,7 @@ if __name__ == "__main__":
             break
         history.append({"role": "user", "content": query})
         agent_loop(history)
+        # 打印模型的最终文本回复
         response_content = history[-1]["content"]
         if isinstance(response_content, list):
             for block in response_content:
