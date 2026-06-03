@@ -298,7 +298,7 @@ def agent_loop(messages: list) -> None:
             tools=TOOLS,
             max_tokens=8000,
         )
-        messages.append({"role": "assistant", "content": response.content})
+        messages.append({"role": "assistant", "content": [b.model_dump() for b in response.content]})
 
         if response.stop_reason != "tool_use":
             return
