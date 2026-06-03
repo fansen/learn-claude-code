@@ -1,40 +1,37 @@
 #!/usr/bin/env python3
-# Harness: persistence -- remembering across the session boundary.
+# 线束：持久化 -- 跨越会话边界的记忆。
 """
-s09_memory_system.py - Memory System
+s09_memory_system.py - 记忆系统
 
-This teaching version focuses on one core idea:
-some information should survive the current conversation, but not everything
-belongs in memory.
+教学版聚焦于一个核心理念：
+某些信息应当在当前对话之外存活，但并非所有东西都适合存入记忆。
 
-Use memory for:
-  - user preferences
-  - repeated user feedback
-  - project facts that are NOT obvious from the current code
-  - pointers to external resources
+适合存入记忆的：
+  - 用户偏好
+  - 用户的反复反馈
+  - 无法从当前代码中直接看出的项目事实
+  - 外部资源的指针
 
-Do NOT use memory for:
-  - code structure that can be re-read from the repo
-  - temporary task state
-  - secrets
+不适合存入记忆的：
+  - 可以从仓库重新读取的代码结构
+  - 临时任务状态
+  - 密钥
 
-Storage layout:
+存储布局：
   .memory/
     MEMORY.md
     prefer_tabs.md
     review_style.md
     incident_board.md
 
-Each memory is a small Markdown file with frontmatter.
-The agent can save a memory through save_memory(), and the memory index
-is rebuilt after each write.
+每条记忆是一个带 frontmatter 的小 Markdown 文件。
+Agent 通过 save_memory() 保存记忆，每次写入后重建索引。
 
-An optional "Dream" pass can later consolidate, deduplicate, and prune
-stored memories. It is useful, but it is not the first thing readers need
-to understand.
+可选的 "Dream" 整理过程可以后续对存储的记忆进行合并、去重和裁剪。
+它很有用，但不是读者首先需要理解的内容。
 
-Key insight: "Memory only stores cross-session information that is still
-worth recalling later and is not easy to re-derive from the current repo."
+核心洞察："记忆只存储跨会话的、以后仍值得回忆的、
+且无法从当前仓库轻松推导出的信息。"
 """
 
 import json
@@ -63,23 +60,23 @@ MAX_INDEX_LINES = 200
 
 class MemoryManager:
     """
-    Load, build, and save persistent memories across sessions.
+    跨会话加载、构建和保存持久化记忆。
 
-    The teaching version keeps memory explicit:
-    one Markdown file per memory, plus one compact index file.
+    教学版保持记忆的显式性：
+    每条记忆一个 Markdown 文件，加上一个紧凑的索引文件。
     """
 
     def __init__(self, memory_dir: Path = None):
         self.memory_dir = memory_dir or MEMORY_DIR
-        self.memories = {}  # name -> {description, type, content}
+        self.memories = {}  # name -> {description, type, content} 的映射
 
     def load_all(self):
-        """Load MEMORY.md index and all individual memory files."""
+        """加载 MEMORY.md 索引和所有单独的记忆文件。"""
         self.memories = {}
         if not self.memory_dir.exists():
             return
 
-        # Scan all .md files except MEMORY.md
+        # 扫描所有 .md 文件（MEMORY.md 除外）
         for md_file in sorted(self.memory_dir.glob("*.md")):
             if md_file.name == "MEMORY.md":
                 continue
@@ -98,7 +95,7 @@ class MemoryManager:
             print(f"[Memory loaded: {count} memories from {self.memory_dir}]")
 
     def load_memory_prompt(self) -> str:
-        """Build a memory section for injection into the system prompt."""
+        """构建记忆段落，用于注入 system prompt。"""
         if not self.memories:
             return ""
 
@@ -106,7 +103,7 @@ class MemoryManager:
         sections.append("# Memories (persistent across sessions)")
         sections.append("")
 
-        # Group by type for readability
+        # 按类型分组以提高可读性
         for mem_type in MEMORY_TYPES:
             typed = {k: v for k, v in self.memories.items() if v["type"] == mem_type}
             if not typed:
@@ -122,21 +119,21 @@ class MemoryManager:
 
     def save_memory(self, name: str, description: str, mem_type: str, content: str) -> str:
         """
-        Save a memory to disk and update the index.
+        将记忆保存到磁盘并更新索引。
 
-        Returns a status message.
+        返回状态消息。
         """
         if mem_type not in MEMORY_TYPES:
             return f"Error: type must be one of {MEMORY_TYPES}"
 
-        # Sanitize name for filename
+        # 清洗名称用作文件名
         safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", name.lower())
         if not safe_name:
             return "Error: invalid memory name"
 
         self.memory_dir.mkdir(parents=True, exist_ok=True)
 
-        # Write individual memory file with frontmatter
+        # 写入带 frontmatter 的单个记忆文件
         frontmatter = (
             f"---\n"
             f"name: {name}\n"
@@ -149,7 +146,7 @@ class MemoryManager:
         file_path = self.memory_dir / file_name
         file_path.write_text(frontmatter)
 
-        # Update in-memory store
+        # 更新内存中的存储
         self.memories[name] = {
             "description": description,
             "type": mem_type,
@@ -157,13 +154,13 @@ class MemoryManager:
             "file": file_name,
         }
 
-        # Rebuild MEMORY.md index
+        # 重建 MEMORY.md 索引
         self._rebuild_index()
 
         return f"Saved memory '{name}' [{mem_type}] to {file_path.relative_to(WORKDIR)}"
 
     def _rebuild_index(self):
-        """Rebuild MEMORY.md from current in-memory state, capped at 200 lines."""
+        """从当前内存状态重建 MEMORY.md，上限 200 行。"""
         lines = ["# Memory Index", ""]
         for name, mem in self.memories.items():
             lines.append(f"- {name}: {mem['description']} [{mem['type']}]")
@@ -174,7 +171,7 @@ class MemoryManager:
         MEMORY_INDEX.write_text("\n".join(lines) + "\n")
 
     def _parse_frontmatter(self, text: str) -> dict | None:
-        """Parse --- delimited frontmatter + body content."""
+        """解析 --- 分隔的 frontmatter + 正文内容。"""
         match = re.match(r"^---\s*\n(.*?)\n---\s*\n(.*)", text, re.DOTALL)
         if not match:
             return None
@@ -189,17 +186,16 @@ class MemoryManager:
 
 class DreamConsolidator:
     """
-    Auto-consolidation of memories between sessions ("Dream").
+    会话间记忆的自动整理（"Dream"）。
 
-    This is an optional later-stage feature. Its job is to prevent the memory
-    store from growing into a noisy pile by merging, deduplicating, and
-    pruning entries over time.
+    这是一个可选的后期功能。它的职责是通过合并、去重和裁剪，
+    防止记忆存储随时间增长为嘈杂的堆积。
     """
 
-    COOLDOWN_SECONDS = 86400       # 24 hours between consolidations
-    SCAN_THROTTLE_SECONDS = 600    # 10 minutes between scan attempts
-    MIN_SESSION_COUNT = 5          # need enough data to consolidate
-    LOCK_STALE_SECONDS = 3600      # PID lock considered stale after 1 hour
+    COOLDOWN_SECONDS = 86400       # 两次整理间隔 24 小时
+    SCAN_THROTTLE_SECONDS = 600    # 两次扫描尝试间隔 10 分钟
+    MIN_SESSION_COUNT = 5          # 需要足够多的数据才能整理
+    LOCK_STALE_SECONDS = 3600      # PID 锁超过 1 小时视为过期
 
     PHASES = [
         "Orient: scan MEMORY.md index for structure and categories",
@@ -219,47 +215,47 @@ class DreamConsolidator:
 
     def should_consolidate(self) -> tuple[bool, str]:
         """
-        Check 7 gates in sequence. All must pass.
-        Returns (can_run, reason) where reason explains the first failed gate.
+        按顺序检查 7 个门控条件，全部通过才可执行。
+        返回 (can_run, reason)，reason 解释第一个失败的门控。
         """
         import time
 
         now = time.time()
 
-        # Gate 1: enabled flag
+        # 门控 1：启用标志
         if not self.enabled:
             return False, "Gate 1: consolidation is disabled"
 
-        # Gate 2: memory directory exists and has memory files
+        # 门控 2：记忆目录存在且有记忆文件
         if not self.memory_dir.exists():
             return False, "Gate 2: memory directory does not exist"
         memory_files = list(self.memory_dir.glob("*.md"))
-        # Exclude MEMORY.md itself from the count
+        # 计数时排除 MEMORY.md 本身
         memory_files = [f for f in memory_files if f.name != "MEMORY.md"]
         if not memory_files:
             return False, "Gate 2: no memory files found"
 
-        # Gate 3: not in plan mode (only consolidate in active modes)
+        # 门控 3：不在 plan 模式下（仅在活跃模式下整理）
         if self.mode == "plan":
             return False, "Gate 3: plan mode does not allow consolidation"
 
-        # Gate 4: 24-hour cooldown since last consolidation
+        # 门控 4：距上次整理的 24 小时冷却期
         time_since_last = now - self.last_consolidation_time
         if time_since_last < self.COOLDOWN_SECONDS:
             remaining = int(self.COOLDOWN_SECONDS - time_since_last)
             return False, f"Gate 4: cooldown active, {remaining}s remaining"
 
-        # Gate 5: 10-minute throttle since last scan attempt
+        # 门控 5：距上次扫描尝试的 10 分钟节流
         time_since_scan = now - self.last_scan_time
         if time_since_scan < self.SCAN_THROTTLE_SECONDS:
             remaining = int(self.SCAN_THROTTLE_SECONDS - time_since_scan)
             return False, f"Gate 5: scan throttle active, {remaining}s remaining"
 
-        # Gate 6: need at least 5 sessions worth of data
+        # 门控 6：需要至少 5 个会话的数据量
         if self.session_count < self.MIN_SESSION_COUNT:
             return False, f"Gate 6: only {self.session_count} sessions, need {self.MIN_SESSION_COUNT}"
 
-        # Gate 7: no active lock file (check PID staleness)
+        # 门控 7：没有活跃的锁文件（检查 PID 是否过期）
         if not self._acquire_lock():
             return False, "Gate 7: lock held by another process"
 
@@ -267,10 +263,10 @@ class DreamConsolidator:
 
     def consolidate(self) -> list[str]:
         """
-        Run the 4-phase consolidation process.
+        运行 4 阶段整理流程。
 
-        The teaching version returns phase descriptions to make the flow
-        visible without requiring an extra LLM pass here.
+        教学版返回阶段描述，使流程可见，
+        而不需要在此处额外调用 LLM。
         """
         import time
 
@@ -294,8 +290,8 @@ class DreamConsolidator:
 
     def _acquire_lock(self) -> bool:
         """
-        Acquire a PID-based lock file. Returns False if locked by another
-        live process. Stale locks (older than LOCK_STALE_SECONDS) are removed.
+        获取基于 PID 的锁文件。如果被其他存活进程锁定则返回 False。
+        过期的锁（超过 LOCK_STALE_SECONDS）会被移除。
         """
         import time
 
@@ -306,23 +302,23 @@ class DreamConsolidator:
                 pid = int(pid_str)
                 lock_time = float(timestamp_str)
 
-                # Check if lock is stale
+                # 检查锁是否过期
                 if (time.time() - lock_time) > self.LOCK_STALE_SECONDS:
                     print(f"[Dream] Removing stale lock from PID {pid}")
                     self.lock_file.unlink()
                 else:
-                    # Check if owning process is still alive
+                    # 检查持锁进程是否仍存活
                     try:
                         os.kill(pid, 0)
-                        return False  # process alive, lock is valid
+                        return False  # 进程存活，锁有效
                     except OSError:
                         print(f"[Dream] Removing lock from dead PID {pid}")
                         self.lock_file.unlink()
             except (ValueError, OSError):
-                # Corrupted lock file, remove it
+                # 损坏的锁文件，移除它
                 self.lock_file.unlink(missing_ok=True)
 
-        # Write new lock
+        # 写入新锁
         try:
             self.memory_dir.mkdir(parents=True, exist_ok=True)
             self.lock_file.write_text(f"{os.getpid()}:{time.time()}")
@@ -331,7 +327,7 @@ class DreamConsolidator:
             return False
 
     def _release_lock(self):
-        """Release the lock file if we own it."""
+        """如果我们持有锁文件则释放它。"""
         try:
             if self.lock_file.exists():
                 lock_data = self.lock_file.read_text().strip()
@@ -342,7 +338,7 @@ class DreamConsolidator:
             pass
 
 
-# -- Tool implementations --
+# -- 工具实现 --
 def safe_path(p: str) -> Path:
     path = (WORKDIR / p).resolve()
     if not path.is_relative_to(WORKDIR):
@@ -395,7 +391,7 @@ def run_edit(path: str, old_text: str, new_text: str) -> str:
         return f"Error: {e}"
 
 
-# Global memory manager
+# 全局记忆管理器
 memory_mgr = MemoryManager()
 
 
@@ -448,10 +444,10 @@ When NOT to save:
 
 
 def build_system_prompt() -> str:
-    """Assemble system prompt with memory content included."""
+    """组装包含记忆内容的 system prompt。"""
     parts = [f"You are a coding agent at {WORKDIR}. Use tools to solve tasks."]
 
-    # Inject memory content if available
+    # 如果有记忆内容则注入
     memory_section = memory_mgr.load_memory_prompt()
     if memory_section:
         parts.append(memory_section)
@@ -462,10 +458,10 @@ def build_system_prompt() -> str:
 
 def agent_loop(messages: list):
     """
-    Agent loop with memory-aware system prompt.
+    带记忆感知的 agent 循环。
 
-    The system prompt is rebuilt each call so newly saved memories
-    are visible in the next LLM turn within the same session.
+    每次调用都会重建 system prompt，
+    使得同一会话内新保存的记忆在下一轮 LLM 交互中可见。
     """
     while True:
         system = build_system_prompt()
@@ -498,7 +494,7 @@ def agent_loop(messages: list):
 
 
 if __name__ == "__main__":
-    # Load existing memories at session start
+    # 会话启动时加载已有记忆
     memory_mgr.load_all()
     mem_count = len(memory_mgr.memories)
     if mem_count:
@@ -515,7 +511,7 @@ if __name__ == "__main__":
         if query.strip().lower() in ("q", "exit", ""):
             break
 
-        # /memories command to list current memories
+        # /memories 命令：列出当前记忆
         if query.strip() == "/memories":
             if memory_mgr.memories:
                 for name, mem in memory_mgr.memories.items():

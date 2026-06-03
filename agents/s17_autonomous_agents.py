@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-# Harness: autonomy -- models that find work without being told.
+# 线束机制：自治 -- 模型主动寻找工作而无需被告知
 """
-s17_autonomous_agents.py - Autonomous Agents
+s17_autonomous_agents.py - 自治 Agent
 
-Idle cycle with task board polling, auto-claiming unclaimed tasks, and
-identity re-injection after context compression. Builds on task boards,
-team mailboxes, and protocol support from earlier chapters.
+空闲周期轮询任务板，自动认领未分配任务，上下文压缩后重注入身份。
+基于前面章节的任务板、团队邮箱和协议支持。
 
     Teammate lifecycle:
     +-------+
@@ -29,14 +28,12 @@ team mailboxes, and protocol support from earlier chapters.
         |
         +---> timeout (60s) -> shutdown
 
-    Identity re-injection after compression:
+    上下文压缩后的身份重注入：
     messages = [identity_block, ...remaining...]
     "You are 'coder', role: backend, team: my-team"
 
-Key idea: an idle teammate can safely claim ready work instead of waiting
-for every assignment from the lead.
-A teammate here is a long-lived worker, not a one-shot subagent that only
-returns a single summary.
+核心思想：空闲 teammate 可以安全地认领就绪任务，而不用等 lead 逐一分配。
+此处的 teammate 是长期存活的 worker，不是只返回单次摘要的一次性 subagent。
 """
 
 import json
@@ -80,7 +77,7 @@ VALID_MSG_TYPES = {
 _claim_lock = threading.Lock()
 
 
-# -- MessageBus: JSONL inbox per teammate --
+# -- MessageBus：每个 teammate 一个 JSONL 收件箱 --
 class MessageBus:
     def __init__(self, inbox_dir: Path):
         self.dir = inbox_dir
@@ -128,10 +125,10 @@ BUS = MessageBus(INBOX_DIR)
 
 class RequestStore:
     """
-    Durable protocol request records.
+    持久化协议请求记录。
 
-    s17 should not regress from s16 back to in-memory trackers. These request
-    files let autonomous teammates inspect or resume protocol state later.
+    s17 不应从 s16 退化回内存追踪器。这些请求文件让自治 teammate
+    可以在之后检查或恢复协议状态。
     """
 
     def __init__(self, base_dir: Path):
@@ -168,7 +165,7 @@ class RequestStore:
 REQUEST_STORE = RequestStore(REQUESTS_DIR)
 
 
-# -- Task board scanning --
+# -- 任务板扫描 --
 def _append_claim_event(payload: dict):
     TASKS_DIR.mkdir(parents=True, exist_ok=True)
     with CLAIM_EVENTS_PATH.open("a", encoding="utf-8") as f:
@@ -230,7 +227,7 @@ def claim_task(
     return f"Claimed task #{task_id} for {owner} via {source}"
 
 
-# -- Identity re-injection after compression --
+# -- 上下文压缩后的身份重注入 --
 def make_identity_block(name: str, role: str, team_name: str) -> dict:
     return {
         "role": "user",
@@ -245,7 +242,7 @@ def ensure_identity_context(messages: list, name: str, role: str, team_name: str
     messages.insert(1, {"role": "assistant", "content": f"I am {name}. Continuing."})
 
 
-# -- Autonomous TeammateManager --
+# -- 自治 TeammateManager --
 class TeammateManager:
     def __init__(self, team_dir: Path):
         self.dir = team_dir
@@ -304,7 +301,7 @@ class TeammateManager:
         tools = self._teammate_tools()
 
         while True:
-            # -- WORK PHASE: standard agent loop --
+            # -- 工作阶段：标准 agent 循环 --
             for _ in range(50):
                 inbox = BUS.read_inbox(name)
                 for msg in inbox:
@@ -345,7 +342,7 @@ class TeammateManager:
                 if idle_requested:
                     break
 
-            # -- IDLE PHASE: poll for inbox messages and unclaimed tasks --
+            # -- 空闲阶段：轮询收件箱消息和未认领任务 --
             self._set_status(name, "idle")
             resume = False
             polls = IDLE_TIMEOUT // max(POLL_INTERVAL, 1)
@@ -385,7 +382,7 @@ class TeammateManager:
             self._set_status(name, "working")
 
     def _exec(self, sender: str, tool_name: str, args: dict) -> str:
-        # these base tools are unchanged from s02
+        # 这些基础工具与 s02 相同
         if tool_name == "bash":
             return _run_bash(args["command"])
         if tool_name == "read_file":
@@ -442,7 +439,7 @@ class TeammateManager:
         return f"Unknown tool: {tool_name}"
 
     def _teammate_tools(self) -> list:
-        # these base tools are unchanged from s02
+        # 这些基础工具与 s02 相同
         return [
             {"name": "bash", "description": "Run a shell command.",
              "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
@@ -481,7 +478,7 @@ class TeammateManager:
 TEAM = TeammateManager(TEAM_DIR)
 
 
-# -- Base tool implementations (these base tools are unchanged from s02) --
+# -- 基础工具实现（与 s02 相同） --
 def _safe_path(p: str) -> Path:
     path = (WORKDIR / p).resolve()
     if not path.is_relative_to(WORKDIR):
@@ -536,7 +533,7 @@ def _run_edit(path: str, old_text: str, new_text: str) -> str:
         return f"Error: {e}"
 
 
-# -- Lead-specific protocol handlers --
+# -- Lead 专用协议处理器 --
 def handle_shutdown_request(teammate: str) -> str:
     req_id = str(uuid.uuid4())[:8]
     REQUEST_STORE.create({
@@ -577,7 +574,7 @@ def _check_shutdown_status(request_id: str) -> str:
     return json.dumps(REQUEST_STORE.get(request_id) or {"error": "not found"})
 
 
-# -- Lead tool dispatch (14 tools) --
+# -- Lead 工具分发（14 个工具） --
 TOOL_HANDLERS = {
     "bash":              lambda **kw: _run_bash(kw["command"]),
     "read_file":         lambda **kw: _run_read(kw["path"], kw.get("limit")),
@@ -595,7 +592,7 @@ TOOL_HANDLERS = {
     "claim_task":        lambda **kw: claim_task(kw["task_id"], "lead"),
 }
 
-# these base tools are unchanged from s02
+# 这些基础工具与 s02 相同
 TOOLS = [
     {"name": "bash", "description": "Run a shell command.",
      "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},

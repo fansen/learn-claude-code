@@ -1,28 +1,26 @@
 #!/usr/bin/env python3
-# Harness: assembly -- the system prompt is a pipeline, not a string.
+# 线束：组装 -- system prompt 是一条流水线，不是一个字符串。
 """
-s10_system_prompt.py - System Prompt Construction
+s10_system_prompt.py - 系统提示词构建
 
-This chapter teaches one core idea:
-the system prompt should be assembled from clear sections, not written as one
-giant hardcoded blob.
+本章只教一个核心思想：
+system prompt 应该由多个清晰的段落组装而成，而不是写成一大坨硬编码的文本。
 
-Teaching pipeline:
-  1. core instructions
-  2. tool listing
-  3. skill metadata
-  4. memory section
-  5. CLAUDE.md chain
-  6. dynamic context
+教学流水线：
+  1. 核心指令
+  2. 工具列表
+  3. skill 元数据
+  4. 记忆段落
+  5. CLAUDE.md 链
+  6. 动态上下文
 
-The builder keeps stable information separate from information that changes
-often. A simple DYNAMIC_BOUNDARY marker makes that split visible.
+构建器将稳定信息与频繁变化的信息分开。
+一个简单的 DYNAMIC_BOUNDARY 标记使这种分界可见。
 
-Per-turn reminders are even more dynamic. They are better injected as a
-separate user-role system reminder than mixed blindly into the stable prompt.
+每轮提醒更加动态。它们更适合作为独立的 user-role system reminder 注入，
+而不是盲目混入稳定的 prompt 中。
 
-Key insight: "Prompt construction is a pipeline with boundaries, not one
-big string."
+核心洞察："Prompt 构建是一条有边界的流水线，不是一个大字符串。"
 """
 
 import datetime
@@ -49,13 +47,13 @@ DYNAMIC_BOUNDARY = "=== DYNAMIC_BOUNDARY ==="
 
 class SystemPromptBuilder:
     """
-    Assemble the system prompt from independent sections.
+    从独立的段落组装 system prompt。
 
-    The teaching goal here is clarity:
-    each section has one source and one responsibility.
+    这里的教学目标是清晰性：
+    每个段落有一个来源、一个职责。
 
-    That makes the prompt easier to reason about, easier to test, and easier
-    to evolve as the agent grows new capabilities.
+    这使得 prompt 更容易推理、更容易测试，
+    也更容易随着 agent 能力增长而演进。
     """
 
     def __init__(self, workdir: Path = None, tools: list = None):
@@ -64,7 +62,7 @@ class SystemPromptBuilder:
         self.skills_dir = self.workdir / "skills"
         self.memory_dir = self.workdir / ".memory"
 
-    # -- Section 1: Core instructions --
+    # -- 段落 1：核心指令 --
     def _build_core(self) -> str:
         return (
             f"You are a coding agent operating in {self.workdir}.\n"
@@ -72,7 +70,7 @@ class SystemPromptBuilder:
             "Always verify before assuming. Prefer reading files over guessing."
         )
 
-    # -- Section 2: Tool listings --
+    # -- 段落 2：工具列表 --
     def _build_tool_listing(self) -> str:
         if not self.tools:
             return ""
@@ -83,7 +81,7 @@ class SystemPromptBuilder:
             lines.append(f"- {tool['name']}({params}): {tool['description']}")
         return "\n".join(lines)
 
-    # -- Section 3: Skill metadata (layer 1 from s05 concept) --
+    # -- 段落 3：Skill 元数据（来自 s05 概念的第 1 层）--
     def _build_skill_listing(self) -> str:
         if not self.skills_dir.exists():
             return ""
@@ -93,7 +91,7 @@ class SystemPromptBuilder:
             if not skill_md.exists():
                 continue
             text = skill_md.read_text()
-            # Parse frontmatter for name + description
+            # 解析 frontmatter 获取 name + description
             match = re.match(r"^---\s*\n(.*?)\n---", text, re.DOTALL)
             if not match:
                 continue
@@ -109,7 +107,7 @@ class SystemPromptBuilder:
             return ""
         return "# Available skills\n" + "\n".join(skills)
 
-    # -- Section 4: Memory content --
+    # -- 段落 4：记忆内容 --
     def _build_memory_section(self) -> str:
         if not self.memory_dir.exists():
             return ""
@@ -135,28 +133,28 @@ class SystemPromptBuilder:
             return ""
         return "# Memories (persistent)\n\n" + "\n\n".join(memories)
 
-    # -- Section 5: CLAUDE.md chain --
+    # -- 段落 5：CLAUDE.md 链 --
     def _build_claude_md(self) -> str:
         """
-        Load CLAUDE.md files in priority order (all are included):
-        1. ~/.claude/CLAUDE.md (user-global instructions)
-        2. <project-root>/CLAUDE.md (project instructions)
-        3. <current-subdir>/CLAUDE.md (directory-specific instructions)
+        按优先级加载 CLAUDE.md 文件（全部包含）：
+        1. ~/.claude/CLAUDE.md（用户全局指令）
+        2. <project-root>/CLAUDE.md（项目指令）
+        3. <current-subdir>/CLAUDE.md（目录级指令）
         """
         sources = []
 
-        # User-global
+        # 用户全局
         user_claude = Path.home() / ".claude" / "CLAUDE.md"
         if user_claude.exists():
             sources.append(("user global (~/.claude/CLAUDE.md)", user_claude.read_text()))
 
-        # Project root
+        # 项目根目录
         project_claude = self.workdir / "CLAUDE.md"
         if project_claude.exists():
             sources.append(("project root (CLAUDE.md)", project_claude.read_text()))
 
-        # Subdirectory -- in real CC, this walks from cwd up to project root
-        # Teaching: check cwd if different from workdir
+        # 子目录 -- 真正的 CC 会从 cwd 向上遍历到项目根
+        # 教学简化：仅检查 cwd 是否与 workdir 不同
         cwd = Path.cwd()
         if cwd != self.workdir:
             subdir_claude = cwd / "CLAUDE.md"
@@ -171,7 +169,7 @@ class SystemPromptBuilder:
             parts.append(content.strip())
         return "\n\n".join(parts)
 
-    # -- Section 6: Dynamic context --
+    # -- 段落 6：动态上下文 --
     def _build_dynamic_context(self) -> str:
         lines = [
             f"Current date: {datetime.date.today().isoformat()}",
@@ -181,14 +179,14 @@ class SystemPromptBuilder:
         ]
         return "# Dynamic context\n" + "\n".join(lines)
 
-    # -- Assemble all sections --
+    # -- 组装所有段落 --
     def build(self) -> str:
         """
-        Assemble the full system prompt from all sections.
+        从所有段落组装完整的 system prompt。
 
-        Static sections (1-5) are separated from dynamic (6) by
-        the DYNAMIC_BOUNDARY marker. In real CC, the static prefix
-        is cached across turns to save prompt tokens.
+        静态段落（1-5）与动态段落（6）之间用
+        DYNAMIC_BOUNDARY 标记分隔。在真正的 CC 中，静态前缀
+        会跨轮次缓存以节省 prompt token。
         """
         sections = []
 
@@ -212,7 +210,7 @@ class SystemPromptBuilder:
         if claude_md:
             sections.append(claude_md)
 
-        # Static/dynamic boundary
+        # 静态/动态分界线
         sections.append(DYNAMIC_BOUNDARY)
 
         dynamic = self._build_dynamic_context()
@@ -224,10 +222,10 @@ class SystemPromptBuilder:
 
 def build_system_reminder(extra: str = None) -> dict:
     """
-    Build a system-reminder user message for per-turn dynamic content.
+    构建用于每轮动态内容的 system-reminder user 消息。
 
-    The teaching version keeps reminders outside the stable system prompt so
-    short-lived context does not get mixed into the long-lived instructions.
+    教学版本将提醒保持在稳定的 system prompt 之外，
+    以免短生命周期的上下文混入长生命周期的指令中。
     """
     parts = []
     if extra:
@@ -238,7 +236,7 @@ def build_system_reminder(extra: str = None) -> dict:
     return {"role": "user", "content": content}
 
 
-# -- Tool implementations --
+# -- 工具实现 --
 def safe_path(p: str) -> Path:
     path = (WORKDIR / p).resolve()
     if not path.is_relative_to(WORKDIR):
@@ -309,16 +307,16 @@ TOOLS = [
      "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}}, "required": ["path", "old_text", "new_text"]}},
 ]
 
-# Global prompt builder
+# 全局 prompt 构建器
 prompt_builder = SystemPromptBuilder(workdir=WORKDIR, tools=TOOLS)
 
 
 def agent_loop(messages: list):
     """
-    Agent loop with assembled system prompt.
+    使用组装式 system prompt 的 agent 循环。
 
-    The system prompt is rebuilt each iteration. In real CC, the static
-    prefix is cached and only the dynamic suffix changes per turn.
+    每次迭代都会重新构建 system prompt。在真正的 CC 中，
+    静态前缀会被缓存，只有动态后缀每轮变化。
     """
     while True:
         system = prompt_builder.build()
@@ -351,12 +349,12 @@ def agent_loop(messages: list):
 
 
 if __name__ == "__main__":
-    # Show the assembled prompt at startup for educational purposes
+    # 启动时展示组装后的 prompt，用于教学
     full_prompt = prompt_builder.build()
     section_count = full_prompt.count("\n# ")
     print(f"[System prompt assembled: {len(full_prompt)} chars, ~{section_count} sections]")
 
-    # /prompt command shows the full assembled prompt
+    # /prompt 命令展示完整的组装后 prompt
     history = []
     while True:
         try:

@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-# Harness: on-demand knowledge -- discover skills cheaply, load them only when needed.
+# 线束机制：按需知识 -- 低成本发现 skill，仅在需要时加载完整内容。
 """
-s05_skill_loading.py - Skills
+s05_skill_loading.py - Skill 加载
 
-This chapter teaches a two-layer skill model:
+本章演示两层 skill 模型：
 
-1. Put a cheap skill catalog in the system prompt.
-2. Load the full skill body only when the model asks for it.
+1. 在 system prompt 中放置低成本的 skill 目录。
+2. 仅在模型请求时才加载完整的 skill 内容。
 
-That keeps the prompt small while still giving the model access to reusable,
-task-specific guidance.
+这样既保持 prompt 体积小，又让模型能访问可复用的、特定任务的指导知识。
 """
 
 import os

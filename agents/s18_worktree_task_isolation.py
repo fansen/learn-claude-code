@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-# Harness: directory isolation -- parallel execution lanes that never collide.
+# 线束机制：目录隔离 -- 互不冲突的并行执行通道
 """
-s18_worktree_task_isolation.py - Worktree + Task Isolation
+s18_worktree_task_isolation.py - Worktree + 任务隔离
 
-Directory-level isolation for parallel task execution.
-Tasks are the control plane and worktrees are the execution plane.
+目录级别的并行任务执行隔离。
+任务是控制面，worktree 是执行面。
 
     .tasks/task_12.json
       {
@@ -27,20 +27,20 @@ Tasks are the control plane and worktrees are the execution plane.
         ]
       }
 
-Key insight: "Isolate by directory, coordinate by task ID."
+核心洞察："按目录隔离，按任务 ID 协调。"
 
-Read this file in this order:
-1. EventBus: how worktree lifecycle stays observable.
-2. TaskManager: how a task binds to an execution lane without becoming the lane itself.
-3. Worktree registry / closeout helpers: how directory state is created, tracked, and cleaned up.
+建议按此顺序阅读：
+1. EventBus：worktree 生命周期如何保持可观测。
+2. TaskManager：任务如何绑定到执行通道而不变成通道本身。
+3. Worktree 注册表 / closeout 辅助函数：目录状态如何创建、追踪和清理。
 
-Most common confusion:
-- a worktree is not the task itself
-- a worktree record is not just a path string
+最常见的困惑：
+- worktree 不是任务本身
+- worktree 记录不只是一个路径字符串
 
-Teaching boundary:
-this file teaches isolated execution lanes first.
-Cross-machine execution, merge automation, and enterprise policy glue are intentionally out of scope.
+教学边界：
+本文件先教隔离的执行通道。
+跨机器执行、合并自动化和企业策略胶水层故意不在范围内。
 """
 
 import json
@@ -85,7 +85,7 @@ SYSTEM = (
 )
 
 
-# -- EventBus: append-only lifecycle events for observability --
+# -- EventBus：append-only 生命周期事件，用于可观测性 --
 class EventBus:
     def __init__(self, event_log_path: Path):
         self.path = event_log_path
@@ -117,7 +117,7 @@ class EventBus:
         return json.dumps(items, indent=2)
 
 
-# -- TaskManager: persistent task board with optional worktree binding --
+# -- TaskManager：持久化任务板，支持可选的 worktree 绑定 --
 class TaskManager:
     def __init__(self, tasks_dir: Path):
         self.dir = tasks_dir
@@ -229,7 +229,7 @@ TASKS = TaskManager(REPO_ROOT / ".tasks")
 EVENTS = EventBus(REPO_ROOT / ".worktrees" / "events.jsonl")
 
 
-# -- WorktreeManager: create/list/run/remove git worktrees --
+# -- WorktreeManager：创建/列出/运行/移除 git worktree --
 class WorktreeManager:
     def __init__(self, repo_root: Path, tasks: TaskManager, events: EventBus):
         self.repo_root = repo_root
@@ -475,7 +475,7 @@ class WorktreeManager:
 WORKTREES = WorktreeManager(REPO_ROOT, TASKS, EVENTS)
 
 
-# -- Base tools (same as previous sessions, kept minimal) --
+# -- 基础工具（与前面章节相同，保持最小化） --
 def safe_path(p: str) -> Path:
     path = (WORKDIR / p).resolve()
     if not path.is_relative_to(WORKDIR):
@@ -556,7 +556,7 @@ TOOL_HANDLERS = {
     "worktree_events": lambda **kw: EVENTS.list_recent(kw.get("limit", 20)),
 }
 
-# Compact tool definitions -- same schema, less vertical space
+# 紧凑工具定义 -- 同样的 schema，更少的纵向空间
 TOOLS = [
     {"name": "bash", "description": "Run a shell command in the current workspace.",
      "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},

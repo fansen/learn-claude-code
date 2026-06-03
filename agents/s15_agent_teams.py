@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-# Harness: team mailboxes -- multiple models, coordinated through files.
+# 线束机制：团队邮箱 -- 多个模型通过文件协调
 """
-s15_agent_teams.py - Agent Teams
+s15_agent_teams.py - Agent 团队
 
-Persistent named agents with file-based JSONL inboxes. Each teammate runs
-its own agent loop in a separate thread. Communication happens through
-append-only inbox files.
+持久化命名 Agent，基于文件的 JSONL 收件箱。每个 teammate 在独立线程中
+运行自己的 agent 循环。通信通过 append-only 收件箱文件进行。
 
     Subagent (s04):  spawn -> execute -> return summary -> destroyed
     Teammate (s15):  spawn -> work -> idle -> work -> ... -> shutdown
@@ -32,20 +31,20 @@ append-only inbox files.
     | status -> idle   |      |                  |
     +------------------+      +------------------+
 
-Key idea: teammates have names, inboxes, and independent loops.
+核心思想：teammate 拥有名字、收件箱和独立循环。
 
-Read this file in this order:
-1. MessageBus: how messages are queued and drained.
-2. TeammateManager: what persistent teammate state looks like.
-3. _teammate_loop / TOOL_HANDLERS: how each named teammate keeps re-entering the same tool loop.
+建议按此顺序阅读：
+1. MessageBus：消息如何入队和排空。
+2. TeammateManager：持久化 teammate 状态长什么样。
+3. _teammate_loop / TOOL_HANDLERS：每个命名 teammate 如何持续重入同一个工具循环。
 
-Most common confusion:
-- a teammate is not a one-shot subagent
-- an inbox message is not yet a full protocol request
+最常见的困惑：
+- teammate 不是一次性的 subagent
+- 收件箱消息还不是完整的协议请求
 
-Teaching boundary:
-this file teaches persistent named workers plus mailboxes.
-Approval protocols and autonomous policies are added in later chapters.
+教学边界：
+本文件教持久化命名 worker + 邮箱。
+审批协议和自治策略在后续章节中添加。
 """
 
 import json
@@ -80,7 +79,7 @@ VALID_MSG_TYPES = {
 }
 
 
-# -- MessageBus: JSONL inbox per teammate --
+# -- MessageBus：每个 teammate 一个 JSONL 收件箱 --
 class MessageBus:
     def __init__(self, inbox_dir: Path):
         self.dir = inbox_dir
@@ -126,9 +125,9 @@ class MessageBus:
 BUS = MessageBus(INBOX_DIR)
 
 
-# -- TeammateManager: persistent named agents with config.json --
+# -- TeammateManager：持久化命名 Agent + config.json --
 class TeammateManager:
-    """Persistent teammate registry plus worker-loop launcher."""
+    """持久化 teammate 注册表 + worker 循环启动器。"""
 
     def __init__(self, team_dir: Path):
         self.dir = team_dir
@@ -212,7 +211,7 @@ class TeammateManager:
             self._save_config()
 
     def _exec(self, sender: str, tool_name: str, args: dict) -> str:
-        # these base tools are unchanged from s02
+        # 这些基础工具与 s02 相同
         if tool_name == "bash":
             return _run_bash(args["command"])
         if tool_name == "read_file":
@@ -228,7 +227,7 @@ class TeammateManager:
         return f"Unknown tool: {tool_name}"
 
     def _teammate_tools(self) -> list:
-        # these base tools are unchanged from s02
+        # 这些基础工具与 s02 相同
         return [
             {"name": "bash", "description": "Run a shell command.",
              "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
@@ -259,7 +258,7 @@ class TeammateManager:
 TEAM = TeammateManager(TEAM_DIR)
 
 
-# -- Base tool implementations (these base tools are unchanged from s02) --
+# -- 基础工具实现（与 s02 相同） --
 def _safe_path(p: str) -> Path:
     path = (WORKDIR / p).resolve()
     if not path.is_relative_to(WORKDIR):
@@ -314,7 +313,7 @@ def _run_edit(path: str, old_text: str, new_text: str) -> str:
         return f"Error: {e}"
 
 
-# -- Lead tool dispatch (9 tools) --
+# -- Lead 工具分发（9 个工具） --
 TOOL_HANDLERS = {
     "bash":            lambda **kw: _run_bash(kw["command"]),
     "read_file":       lambda **kw: _run_read(kw["path"], kw.get("limit")),
@@ -327,7 +326,7 @@ TOOL_HANDLERS = {
     "broadcast":       lambda **kw: BUS.broadcast("lead", kw["content"], TEAM.member_names()),
 }
 
-# these base tools are unchanged from s02
+# 这些基础工具与 s02 相同
 TOOLS = [
     {"name": "bash", "description": "Run a shell command.",
      "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},

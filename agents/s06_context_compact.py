@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-# Harness: compression -- clean memory for infinite sessions.
+# 线束机制：压缩 -- 干净的记忆，实现无限会话。
 """
-s06_context_compact.py - Compact
+s06_context_compact.py - 上下文压缩
 
-Three-layer compression pipeline so the agent can work forever:
+三层压缩管道，让 Agent 可以无限工作：
 
     Every turn:
     +------------------+
@@ -11,9 +11,9 @@ Three-layer compression pipeline so the agent can work forever:
     +------------------+
             |
             v
-    [Layer 1: micro_compact]        (silent, every turn)
-      Replace non-read_file tool_result content older than last 3
-      with "[Previous: used {tool_name}]"
+    [Layer 1: micro_compact]        （静默执行，每轮触发）
+      将超过最近 3 条的非 read_file 的 tool_result 内容
+      替换为 "[Previous: used {tool_name}]"
             |
             v
     [Check: tokens > 50000?]
@@ -22,16 +22,16 @@ Three-layer compression pipeline so the agent can work forever:
        |               |
        v               v
     continue    [Layer 2: auto_compact]
-                  Save full transcript to .transcripts/
-                  Ask LLM to summarize conversation.
-                  Replace all messages with [summary].
+                  将完整对话保存到 .transcripts/
+                  请求 LLM 总结对话。
+                  用 [summary] 替换所有消息。
                         |
                         v
                 [Layer 3: compact tool]
-                  Model calls compact -> immediate summarization.
-                  Same as auto, triggered manually.
+                  模型调用 compact -> 立即总结。
+                  与 auto 相同，手动触发。
 
-Key insight: "The agent can forget strategically and keep working forever."
+核心洞察："Agent 可以有策略地遗忘，从而永远工作下去。"
 """
 
 import json
@@ -61,13 +61,13 @@ PRESERVE_RESULT_TOOLS = {"read_file"}
 
 
 def estimate_tokens(messages: list) -> int:
-    """Rough token count: ~4 chars per token."""
+    """粗略 token 计数：约 4 个字符 = 1 个 token。"""
     return len(str(messages)) // 4
 
 
-# -- Layer 1: micro_compact - replace old tool results with placeholders --
+# -- 第 1 层：micro_compact - 用占位符替换旧的工具结果 --
 def micro_compact(messages: list) -> list:
-    # Collect (msg_index, part_index, tool_result_dict) for all tool_result entries
+    # 收集所有 tool_result 条目的 (msg_index, part_index, tool_result_dict)
     tool_results = []
     for msg_idx, msg in enumerate(messages):
         if msg["role"] == "user" and isinstance(msg.get("content"), list):
@@ -76,7 +76,7 @@ def micro_compact(messages: list) -> list:
                     tool_results.append((msg_idx, part_idx, part))
     if len(tool_results) <= KEEP_RECENT:
         return messages
-    # Find tool_name for each result by matching tool_use_id in prior assistant messages
+    # 通过匹配之前 assistant 消息中的 tool_use_id 来查找每个结果对应的 tool_name
     tool_name_map = {}
     for msg in messages:
         if msg["role"] == "assistant":
@@ -85,8 +85,8 @@ def micro_compact(messages: list) -> list:
                 for block in content:
                     if hasattr(block, "type") and block.type == "tool_use":
                         tool_name_map[block.id] = block.name
-    # Clear old results (keep last KEEP_RECENT). Preserve read_file outputs because
-    # they are reference material; compacting them forces the agent to re-read files.
+    # 清除旧结果（保留最近 KEEP_RECENT 条）。保留 read_file 的输出，因为
+    # 它们是参考资料；压缩它们会迫使 Agent 重新读取文件。
     to_clear = tool_results[:-KEEP_RECENT]
     for _, _, result in to_clear:
         if not isinstance(result.get("content"), str) or len(result["content"]) <= 100:
@@ -99,16 +99,16 @@ def micro_compact(messages: list) -> list:
     return messages
 
 
-# -- Layer 2: auto_compact - save transcript, summarize, replace messages --
+# -- 第 2 层：auto_compact - 保存对话记录、总结、替换消息 --
 def auto_compact(messages: list, focus: str = "") -> list:
-    # Save full transcript to disk
+    # 将完整对话记录保存到磁盘
     TRANSCRIPT_DIR.mkdir(exist_ok=True)
     transcript_path = TRANSCRIPT_DIR / f"transcript_{int(time.time())}.jsonl"
     with open(transcript_path, "w") as f:
         for msg in messages:
             f.write(json.dumps(msg, default=str) + "\n")
     print(f"[transcript saved: {transcript_path}]")
-    # Ask LLM to summarize
+    # 请求 LLM 进行总结
     conversation_text = json.dumps(messages, default=str)[-80000:]
     focus_instruction = ""
     if focus:
@@ -125,13 +125,13 @@ def auto_compact(messages: list, focus: str = "") -> list:
     summary = next((block.text for block in response.content if hasattr(block, "text")), "")
     if not summary:
         summary = "No summary generated."
-    # Replace all messages with compressed summary
+    # 用压缩后的摘要替换所有消息
     return [
         {"role": "user", "content": f"[Conversation compressed. Transcript: {transcript_path}]\n\n{summary}"},
     ]
 
 
-# -- Tool implementations --
+# -- 工具实现 --
 def safe_path(p: str) -> Path:
     path = (WORKDIR / p).resolve()
     if not path.is_relative_to(WORKDIR):
@@ -204,9 +204,9 @@ TOOLS = [
 
 def agent_loop(messages: list):
     while True:
-        # Layer 1: micro_compact before each LLM call
+        # 第 1 层：每次 LLM 调用前执行 micro_compact
         micro_compact(messages)
-        # Layer 2: auto_compact if token estimate exceeds threshold
+        # 第 2 层：当 token 估算超过阈值时触发 auto_compact
         if estimate_tokens(messages) > THRESHOLD:
             print("[auto_compact triggered]")
             messages[:] = auto_compact(messages)
@@ -236,7 +236,7 @@ def agent_loop(messages: list):
                 print(str(output)[:200])
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": str(output)})
         messages.append({"role": "user", "content": results})
-        # Layer 3: manual compact triggered by the compact tool
+        # 第 3 层：由 compact 工具手动触发的压缩
         if manual_compact:
             print("[manual compact]")
             messages[:] = auto_compact(messages, focus=compact_focus)

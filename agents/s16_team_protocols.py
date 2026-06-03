@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-# Harness: protocols -- structured handshakes between models.
+# 线束机制：协议 -- 模型之间的结构化握手
 """
-s16_team_protocols.py - Team Protocols
+s16_team_protocols.py - 团队协议
 
-Shutdown protocol and plan approval protocol, both using the same
-request_id correlation pattern. Builds on s15's mailbox-based team messaging.
+关闭协议和方案审批协议，都使用相同的 request_id 关联模式。
+基于 s15 的邮箱式团队消息。
 
     Shutdown FSM: pending -> approved | rejected
 
@@ -44,21 +44,21 @@ request_id correlation pattern. Builds on s15's mailbox-based team messaging.
 
     Request store: .team/requests/{request_id}.json
 
-Key idea: one request/response shape can support multiple kinds of team workflow.
-Protocol requests are structured workflow objects, not normal free-form chat.
+核心思想：同一个 request/response 形式可以支持多种团队工作流。
+协议请求是结构化的工作流对象，不是普通的自由文本聊天。
 
-Read this file in this order:
-1. MessageBus: how protocol envelopes still travel through the same inbox surface.
-2. Request files under .team/requests: how a request keeps durable status after the message is sent.
-3. Protocol handlers: how shutdown and plan approval reuse the same correlation pattern.
+建议按此顺序阅读：
+1. MessageBus：协议信封如何仍然通过同一个收件箱传输。
+2. .team/requests 下的请求文件：消息发送后如何保持持久化状态。
+3. 协议处理器：shutdown 和 plan approval 如何复用同一个关联模式。
 
-Most common confusion:
-- a protocol request is not a normal teammate chat message
-- a request record is not a task record
+最常见的困惑：
+- 协议请求不是普通的 teammate 聊天消息
+- 请求记录不是任务记录
 
-Teaching boundary:
-this file teaches durable handshakes first.
-Autonomous claiming, task selection, and worktree assignment stay in later chapters.
+教学边界：
+本文件先教持久化握手。
+自治认领、任务选择和 worktree 分配留在后续章节。
 """
 
 import json
@@ -94,7 +94,7 @@ VALID_MSG_TYPES = {
     "plan_approval_response",
 }
 
-# -- MessageBus: JSONL inbox per teammate --
+# -- MessageBus：每个 teammate 一个 JSONL 收件箱 --
 class MessageBus:
     def __init__(self, inbox_dir: Path):
         self.dir = inbox_dir
@@ -142,10 +142,10 @@ BUS = MessageBus(INBOX_DIR)
 
 class RequestStore:
     """
-    Durable request records for protocol workflows.
+    协议工作流的持久化请求记录。
 
-    Protocol state should survive long enough to inspect, resume, or reconcile.
-    This store keeps one JSON file per request_id under .team/requests/.
+    协议状态需要存活足够长的时间以便检查、恢复或对账。
+    每个 request_id 对应 .team/requests/ 下的一个 JSON 文件。
     """
 
     def __init__(self, base_dir: Path):
@@ -182,7 +182,7 @@ class RequestStore:
 REQUEST_STORE = RequestStore(REQUESTS_DIR)
 
 
-# -- TeammateManager with shutdown + plan approval --
+# -- TeammateManager：支持 shutdown + plan approval --
 class TeammateManager:
     def __init__(self, team_dir: Path):
         self.dir = team_dir
@@ -272,7 +272,7 @@ class TeammateManager:
             self._save_config()
 
     def _exec(self, sender: str, tool_name: str, args: dict) -> str:
-        # these base tools are unchanged from s02
+        # 这些基础工具与 s02 相同
         if tool_name == "bash":
             return _run_bash(args["command"])
         if tool_name == "read_file":
@@ -323,7 +323,7 @@ class TeammateManager:
         return f"Unknown tool: {tool_name}"
 
     def _teammate_tools(self) -> list:
-        # these base tools are unchanged from s02
+        # 这些基础工具与 s02 相同
         return [
             {"name": "bash", "description": "Run a shell command.",
              "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
@@ -358,7 +358,7 @@ class TeammateManager:
 TEAM = TeammateManager(TEAM_DIR)
 
 
-# -- Base tool implementations (these base tools are unchanged from s02) --
+# -- 基础工具实现（与 s02 相同） --
 def _safe_path(p: str) -> Path:
     path = (WORKDIR / p).resolve()
     if not path.is_relative_to(WORKDIR):
@@ -413,7 +413,7 @@ def _run_edit(path: str, old_text: str, new_text: str) -> str:
         return f"Error: {e}"
 
 
-# -- Lead-specific protocol handlers --
+# -- Lead 专用协议处理器 --
 def handle_shutdown_request(teammate: str) -> str:
     req_id = str(uuid.uuid4())[:8]
     REQUEST_STORE.create({
@@ -454,7 +454,7 @@ def _check_shutdown_status(request_id: str) -> str:
     return json.dumps(REQUEST_STORE.get(request_id) or {"error": "not found"})
 
 
-# -- Lead tool dispatch (12 tools) --
+# -- Lead 工具分发（12 个工具） --
 TOOL_HANDLERS = {
     "bash":              lambda **kw: _run_bash(kw["command"]),
     "read_file":         lambda **kw: _run_read(kw["path"], kw.get("limit")),
@@ -470,7 +470,7 @@ TOOL_HANDLERS = {
     "plan_approval":     lambda **kw: handle_plan_review(kw["request_id"], kw["approve"], kw.get("feedback", "")),
 }
 
-# these base tools are unchanged from s02
+# 这些基础工具与 s02 相同
 TOOLS = [
     {"name": "bash", "description": "Run a shell command.",
      "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},

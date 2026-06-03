@@ -1,40 +1,36 @@
 #!/usr/bin/env python3
-# Harness: integration -- tools aren't just in your code.
+# 线束机制：集成 -- 工具不只存在于你的代码中
 """
-s19_mcp_plugin.py - MCP & Plugin System
+s19_mcp_plugin.py - MCP 与插件系统
 
-This teaching chapter focuses on the smallest useful idea:
-external processes can expose tools, and your agent can treat them like
-normal tools after a small amount of normalization.
+本教学章节聚焦最小有用思想：
+外部进程可以暴露工具，你的 agent 经过少量标准化后可以像原生工具一样使用它们。
 
-Minimal path:
-  1. start an MCP server process
-  2. ask it which tools it has
-  3. prefix and register those tools
-  4. route matching calls to that server
+最小路径：
+  1. 启动 MCP server 进程
+  2. 询问它有哪些工具
+  3. 添加前缀并注册这些工具
+  4. 将匹配的调用路由到该 server
 
-Plugins add one more layer: discovery. A tiny manifest tells the agent which
-external server to start.
+插件多加一层：发现。一个小清单告诉 agent 启动哪个外部 server。
 
-Key insight: "External tools should enter the same tool pipeline, not form a
-completely separate world." In practice that means shared permission checks
-and normalized tool_result payloads.
+核心洞察："外部工具应进入同一个工具管道，而不是形成完全独立的世界。"
+实践中意味着共享权限检查和标准化的 tool_result 载荷。
 
-Read this file in this order:
-1. CapabilityPermissionGate: external tools still go through the same control gate.
-2. MCPClient: how one server connection exposes tool specs and tool calls.
-3. PluginLoader: how manifests declare external servers.
-4. MCPToolRouter / build_tool_pool: how native and external tools merge into one pool.
+建议按此顺序阅读：
+1. CapabilityPermissionGate：外部工具仍然经过同一个控制门。
+2. MCPClient：一个 server 连接如何暴露工具规格和工具调用。
+3. PluginLoader：清单如何声明外部 server。
+4. MCPToolRouter / build_tool_pool：原生工具和外部工具如何合并为一个池。
 
-Most common confusion:
-- a plugin manifest is not an MCP server
-- an MCP server is not a single MCP tool
-- external capability does not bypass the native permission path
+最常见的困惑：
+- 插件清单不是 MCP server
+- MCP server 不是单个 MCP 工具
+- 外部能力不会绕过原生权限路径
 
-Teaching boundary:
-this file teaches the smallest useful stdio MCP path.
-Marketplace details, auth flows, reconnect logic, and non-tool capability layers
-are intentionally left to bridge docs and later extensions.
+教学边界：
+本文件教最小有用的 stdio MCP 路径。
+市场细节、认证流程、重连逻辑和非工具能力层故意留给桥接文档和后续扩展。
 """
 
 import json
@@ -59,11 +55,11 @@ PERMISSION_MODES = ("default", "auto")
 
 class CapabilityPermissionGate:
     """
-    Shared permission gate for native tools and external capabilities.
+    原生工具与外部能力共享的权限门。
 
-    The teaching goal is simple: MCP does not bypass the control plane.
-    Native tools and MCP tools both become normalized capability intents first,
-    then pass through the same allow / ask policy.
+    教学目标很简单：MCP 不绕过控制面。
+    原生工具和 MCP 工具都先标准化为能力意图，
+    然后通过同一个 allow / ask 策略。
     """
 
     READ_PREFIXES = ("read", "list", "get", "show", "search", "query", "inspect")
@@ -147,10 +143,9 @@ permission_gate = CapabilityPermissionGate()
 
 class MCPClient:
     """
-    Minimal MCP client over stdio.
+    基于 stdio 的最小 MCP 客户端。
 
-    This is enough to teach the core architecture without dragging readers
-    through every transport, auth flow, or marketplace detail up front.
+    足以教授核心架构，无需一开始就拖着读者走遍每种传输、认证流程或市场细节。
     """
 
     def __init__(self, server_name: str, command: str, args: list = None, env: dict = None):
@@ -160,10 +155,10 @@ class MCPClient:
         self.env = {**os.environ, **(env or {})}
         self.process = None
         self._request_id = 0
-        self._tools = []  # cached tool list
+        self._tools = []  # 缓存的工具列表
 
     def connect(self):
-        """Start the MCP server process."""
+        """启动 MCP server 进程。"""
         try:
             self.process = subprocess.Popen(
                 [self.command] + self.args,
@@ -173,7 +168,7 @@ class MCPClient:
                 env=self.env,
                 text=True,
             )
-            # Send initialize request
+            # 发送初始化请求
             self._send({"method": "initialize", "params": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
@@ -181,7 +176,7 @@ class MCPClient:
             }})
             response = self._recv()
             if response and "result" in response:
-                # Send initialized notification
+                # 发送已初始化通知
                 self._send({"method": "notifications/initialized"})
                 return True
         except FileNotFoundError:
@@ -191,7 +186,7 @@ class MCPClient:
         return False
 
     def list_tools(self) -> list:
-        """Fetch available tools from the server."""
+        """从 server 获取可用工具列表。"""
         self._send({"method": "tools/list", "params": {}})
         response = self._recv()
         if response and "result" in response:
@@ -199,7 +194,7 @@ class MCPClient:
         return self._tools
 
     def call_tool(self, tool_name: str, arguments: dict) -> str:
-        """Execute a tool on the server."""
+        """在 server 上执行工具。"""
         self._send({"method": "tools/call", "params": {
             "name": tool_name,
             "arguments": arguments,
@@ -214,9 +209,9 @@ class MCPClient:
 
     def get_agent_tools(self) -> list:
         """
-        Convert MCP tools to agent tool format.
+        将 MCP 工具转换为 agent 工具格式。
 
-        Teaching version uses the same simple prefix idea:
+        教学版本使用同样的简单前缀方案：
         mcp__{server_name}__{tool_name}
         """
         agent_tools = []
@@ -232,7 +227,7 @@ class MCPClient:
         return agent_tools
 
     def disconnect(self):
-        """Shut down the server process."""
+        """关闭 server 进程。"""
         if self.process:
             try:
                 self._send({"method": "shutdown"})
@@ -268,10 +263,10 @@ class MCPClient:
 
 class PluginLoader:
     """
-    Load plugins from .claude-plugin/ directories.
+    从 .claude-plugin/ 目录加载插件。
 
-    Teaching version implements the smallest useful plugin flow:
-    read a manifest, discover MCP server configs, and register them.
+    教学版本实现最小有用的插件流程：
+    读取清单、发现 MCP server 配置并注册。
     """
 
     def __init__(self, search_dirs: list = None):
@@ -279,7 +274,7 @@ class PluginLoader:
         self.plugins = {}  # name -> manifest
 
     def scan(self) -> list:
-        """Scan directories for .claude-plugin/plugin.json manifests."""
+        """扫描目录查找 .claude-plugin/plugin.json 清单。"""
         found = []
         for search_dir in self.search_dirs:
             plugin_dir = Path(search_dir) / ".claude-plugin"
@@ -296,8 +291,8 @@ class PluginLoader:
 
     def get_mcp_servers(self) -> dict:
         """
-        Extract MCP server configs from loaded plugins.
-        Returns {server_name: {command, args, env}}.
+        从已加载的插件中提取 MCP server 配置。
+        返回 {server_name: {command, args, env}}。
         """
         servers = {}
         for plugin_name, manifest in self.plugins.items():
@@ -308,15 +303,14 @@ class PluginLoader:
 
 class MCPToolRouter:
     """
-    Routes tool calls to the correct MCP server.
+    将工具调用路由到正确的 MCP server。
 
-    MCP tools are prefixed mcp__{server}__{tool} and live alongside
-    native tools in the same tool pool. The router strips the prefix
-    and dispatches to the right MCPClient.
+    MCP 工具以 mcp__{server}__{tool} 为前缀，与原生工具共存于同一个工具池。
+    路由器剥离前缀并分发到正确的 MCPClient。
     """
 
     def __init__(self):
-        self.clients = {}  # server_name -> MCPClient
+        self.clients = {}  # server_name -> MCPClient 映射
 
     def register_client(self, client: MCPClient):
         self.clients[client.server_name] = client
@@ -325,7 +319,7 @@ class MCPToolRouter:
         return tool_name.startswith("mcp__")
 
     def call(self, tool_name: str, arguments: dict) -> str:
-        """Route an MCP tool call to the correct server."""
+        """将 MCP 工具调用路由到正确的 server。"""
         parts = tool_name.split("__", 2)
         if len(parts) != 3:
             return f"Error: Invalid MCP tool name: {tool_name}"
@@ -336,14 +330,14 @@ class MCPToolRouter:
         return client.call_tool(actual_tool, arguments)
 
     def get_all_tools(self) -> list:
-        """Collect tools from all connected MCP servers."""
+        """从所有已连接的 MCP server 收集工具。"""
         tools = []
         for client in self.clients.values():
             tools.extend(client.get_agent_tools())
         return tools
 
 
-# -- Native tool implementations (same as s02) --
+# -- 原生工具实现（与 s02 相同） --
 def safe_path(p: str) -> Path:
     path = (WORKDIR / p).resolve()
     if not path.is_relative_to(WORKDIR):
@@ -408,17 +402,16 @@ NATIVE_TOOLS = [
 ]
 
 
-# -- MCP Tool Router (global) --
+# -- MCP 工具路由器（全局） --
 mcp_router = MCPToolRouter()
 plugin_loader = PluginLoader()
 
 
 def build_tool_pool() -> list:
     """
-    Assemble the complete tool pool: native + MCP tools.
+    组装完整工具池：原生 + MCP 工具。
 
-    Native tools take precedence on name conflicts so the local core remains
-    predictable even after external tools are added.
+    名称冲突时原生工具优先，确保添加外部工具后本地核心仍然可预测。
     """
     all_tools = list(NATIVE_TOOLS)
     mcp_tools = mcp_router.get_all_tools()
@@ -432,7 +425,7 @@ def build_tool_pool() -> list:
 
 
 def handle_tool_call(tool_name: str, tool_input: dict) -> str:
-    """Dispatch to native handler or MCP router."""
+    """分发到原生处理器或 MCP 路由器。"""
     if mcp_router.is_mcp_tool(tool_name):
         return mcp_router.call(tool_name, tool_input)
     handler = NATIVE_HANDLERS.get(tool_name)
@@ -456,7 +449,7 @@ def normalize_tool_result(tool_name: str, output: str, intent: dict | None = Non
 
 
 def agent_loop(messages: list):
-    """Agent loop with unified native + MCP tool pool."""
+    """统一原生 + MCP 工具池的 agent 循环。"""
     tools = build_tool_pool()
 
     while True:
@@ -505,16 +498,16 @@ def agent_loop(messages: list):
         messages.append({"role": "user", "content": results})
 
 
-# Further upgrades you can add later:
-# - more transports
-# - auth / approval flows
-# - server reconnect and lifecycle management
-# - filtering external tools before they reach the model
-# - richer plugin installation and update handling
+# 后续可添加的升级：
+# - 更多传输方式
+# - 认证 / 审批流程
+# - server 重连和生命周期管理
+# - 外部工具到达模型前的过滤
+# - 更丰富的插件安装和更新处理
 
 
 if __name__ == "__main__":
-    # Scan for plugins
+    # 扫描插件
     found = plugin_loader.scan()
     if found:
         print(f"[Plugins loaded: {', '.join(found)}]")
@@ -562,6 +555,6 @@ if __name__ == "__main__":
                     print(block.text)
         print()
 
-    # Cleanup MCP connections
+    # 清理 MCP 连接
     for c in mcp_router.clients.values():
         c.disconnect()

@@ -1,36 +1,34 @@
 #!/usr/bin/env python3
-# Harness: all mechanisms combined -- the complete cockpit for the model.
+# 线束机制：所有机制合一 -- 模型的完整驾驶舱
 """
-s_full.py - Capstone Teaching Agent
+s_full.py - 综合教学 Agent
 
-Capstone file that combines the core local mechanisms taught across
-`s01-s18` into one runnable agent.
+综合文件，将 s01-s18 教授的核心本地机制组合成一个可运行的 agent。
 
-`s19` (MCP / plugin integration) is still taught as a separate chapter,
-because external tool connectivity is easier to understand after the local
-core is already stable.
+s19（MCP / 插件集成）仍作为独立章节教授，
+因为外部工具连接在本地核心稳定后更容易理解。
 
-Chapter -> Class/Function mapping:
-  s01 Agent Loop     -> agent_loop()
-  s02 Tool Dispatch  -> TOOL_HANDLERS, normalize_messages()
+章节 -> 类/函数映射：
+  s01 Agent 循环     -> agent_loop()
+  s02 工具分发       -> TOOL_HANDLERS, normalize_messages()
   s03 TodoWrite      -> TodoManager
-  s04 Subagent       -> run_subagent()
-  s05 Skill Loading  -> SkillLoader
-  s06 Context Compact-> maybe_persist_output(), micro_compact(), auto_compact()
-  s07 Permissions    -> PermissionManager
-  s08 Hooks          -> HookManager
-  s09 Memory         -> MemoryManager
-  s10 System Prompt  -> build_system_prompt()
-  s11 Error Recovery -> recovery logic inside agent_loop()
-  s12 Task System    -> TaskManager
-  s13 Background     -> BackgroundManager
-  s14 Cron Scheduler -> CronScheduler
-  s15 Agent Teams    -> TeammateManager, MessageBus
-  s16 Team Protocols -> shutdown_requests, plan_requests dicts
-  s17 Autonomous     -> _idle_poll(), scan_unclaimed_tasks()
+  s04 子 Agent       -> run_subagent()
+  s05 Skill 加载     -> SkillLoader
+  s06 上下文压缩     -> maybe_persist_output(), micro_compact(), auto_compact()
+  s07 权限           -> PermissionManager
+  s08 Hook           -> HookManager
+  s09 记忆           -> MemoryManager
+  s10 系统提示词     -> build_system_prompt()
+  s11 错误恢复       -> agent_loop() 内的恢复逻辑
+  s12 任务系统       -> TaskManager
+  s13 后台任务       -> BackgroundManager
+  s14 Cron 调度      -> CronScheduler
+  s15 Agent 团队     -> TeammateManager, MessageBus
+  s16 团队协议       -> shutdown_requests, plan_requests dicts
+  s17 自治           -> _idle_poll(), scan_unclaimed_tasks()
   s18 Worktree       -> WorktreeManager
 
-REPL commands: /compact /tasks /team /inbox
+REPL 命令：/compact /tasks /team /inbox
 """
 
 import json
@@ -63,7 +61,7 @@ TOKEN_THRESHOLD = 100000
 POLL_INTERVAL = 5
 IDLE_TIMEOUT = 60
 
-# Persisted-output: large tool outputs written to disk, replaced with preview marker
+# 持久化输出：大型工具输出写入磁盘，替换为预览标记
 TASK_OUTPUT_DIR = WORKDIR / ".task_outputs"
 TOOL_RESULTS_DIR = TASK_OUTPUT_DIR / "tool-results"
 PERSIST_OUTPUT_TRIGGER_CHARS_DEFAULT = 50000
@@ -79,7 +77,7 @@ VALID_MSG_TYPES = {"message", "broadcast", "shutdown_request",
                    "shutdown_response", "plan_approval_response"}
 
 
-# === SECTION: persisted_output (s06) ===
+# === 区块：持久化输出 (s06) ===
 def _persist_tool_result(tool_use_id: str, content: str) -> Path:
     TOOL_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     safe_id = re.sub(r"[^a-zA-Z0-9_.-]", "_", tool_use_id or "unknown")
@@ -126,7 +124,7 @@ def maybe_persist_output(tool_use_id: str, output: str, trigger_chars: int = Non
     return _build_persisted_marker(stored_path, output)
 
 
-# === SECTION: base_tools ===
+# === 区块：基础工具 ===
 def safe_path(p: str) -> Path:
     path = (WORKDIR / p).resolve()
     if not path.is_relative_to(WORKDIR):
@@ -180,7 +178,7 @@ def run_edit(path: str, old_text: str, new_text: str) -> str:
         return f"Error: {e}"
 
 
-# === SECTION: todos (s03) ===
+# === 区块：待办事项 (s03) ===
 class TodoManager:
     def __init__(self):
         self.items = []
@@ -217,7 +215,7 @@ class TodoManager:
         return any(item.get("status") != "completed" for item in self.items)
 
 
-# === SECTION: subagent (s04) ===
+# === 区块：子 Agent (s04) ===
 def run_subagent(prompt: str, agent_type: str = "Explore") -> str:
     sub_tools = [
         {"name": "bash", "description": "Run command.",
@@ -256,7 +254,7 @@ def run_subagent(prompt: str, agent_type: str = "Explore") -> str:
     return "(subagent failed)"
 
 
-# === SECTION: skills (s05) ===
+# === 区块：技能加载 (s05) ===
 class SkillLoader:
     def __init__(self, skills_dir: Path):
         self.skills = {}
@@ -284,7 +282,7 @@ class SkillLoader:
         return f"<skill name=\"{name}\">\n{s['body']}\n</skill>"
 
 
-# === SECTION: compression (s06) ===
+# === 区块：上下文压缩 (s06) ===
 def estimate_tokens(messages: list) -> int:
     return len(json.dumps(messages, default=str)) // 4
 
@@ -350,7 +348,7 @@ def auto_compact(messages: list, focus: str = None) -> list:
     ]
 
 
-# === SECTION: file_tasks (s07) ===
+# === 区块：文件任务 (s07) ===
 class TaskManager:
     def __init__(self):
         TASKS_DIR.mkdir(exist_ok=True)
@@ -416,7 +414,7 @@ class TaskManager:
         return f"Claimed task #{tid} for {owner}"
 
 
-# === SECTION: background (s08) ===
+# === 区块：后台任务 (s08) ===
 class BackgroundManager:
     def __init__(self):
         self.tasks = {}
@@ -452,7 +450,7 @@ class BackgroundManager:
         return notifs
 
 
-# === SECTION: messaging (s09) ===
+# === 区块：消息传递 (s09) ===
 class MessageBus:
     def __init__(self):
         INBOX_DIR.mkdir(parents=True, exist_ok=True)
@@ -482,12 +480,12 @@ class MessageBus:
         return f"Broadcast to {count} teammates"
 
 
-# === SECTION: shutdown + plan tracking (s10) ===
+# === 区块：关闭 + 方案追踪 (s10) ===
 shutdown_requests = {}
 plan_requests = {}
 
 
-# === SECTION: team (s09/s11) ===
+# === 区块：团队 (s09/s11) ===
 class TeammateManager:
     def __init__(self, bus: MessageBus, task_mgr: TaskManager):
         TEAM_DIR.mkdir(exist_ok=True)
@@ -545,7 +543,7 @@ class TeammateManager:
             {"name": "claim_task", "description": "Claim task by ID.", "input_schema": {"type": "object", "properties": {"task_id": {"type": "integer"}}, "required": ["task_id"]}},
         ]
         while True:
-            # -- WORK PHASE --
+            # -- 工作阶段 --
             for _ in range(50):
                 inbox = self.bus.read_inbox(name)
                 for msg in inbox:
@@ -585,7 +583,7 @@ class TeammateManager:
                 messages.append({"role": "user", "content": results})
                 if idle_requested:
                     break
-            # -- IDLE PHASE: poll for messages and unclaimed tasks --
+            # -- 空闲阶段：轮询消息和未认领任务 --
             self._set_status(name, "idle")
             resume = False
             for _ in range(IDLE_TIMEOUT // max(POLL_INTERVAL, 1)):
@@ -607,7 +605,7 @@ class TeammateManager:
                 if unclaimed:
                     task = unclaimed[0]
                     self.task_mgr.claim(task["id"], name)
-                    # Identity re-injection for compressed contexts
+                    # 上下文压缩后的身份重注入
                     if len(messages) <= 3:
                         messages.insert(0, {"role": "user", "content":
                             f"<identity>You are '{name}', role: {role}, team: {team_name}.</identity>"})
@@ -633,7 +631,7 @@ class TeammateManager:
         return [m["name"] for m in self.config["members"]]
 
 
-# === SECTION: global_instances ===
+# === 区块：全局实例 ===
 TODO = TodoManager()
 SKILLS = SkillLoader(SKILLS_DIR)
 TASK_MGR = TaskManager()
@@ -641,21 +639,21 @@ BG = BackgroundManager()
 BUS = MessageBus()
 TEAM = TeammateManager(BUS, TASK_MGR)
 
-# === SECTION: system_prompt ===
+# === 区块：系统提示词 ===
 SYSTEM = f"""You are a coding agent at {WORKDIR}. Use tools to solve tasks.
 Prefer task_create/task_update/task_list for multi-step work. Use TodoWrite for short checklists.
 Use task for subagent delegation. Use load_skill for specialized knowledge.
 Skills: {SKILLS.descriptions()}"""
 
 
-# === SECTION: shutdown_protocol (s10) ===
+# === 区块：关闭协议 (s10) ===
 def handle_shutdown_request(teammate: str) -> str:
     req_id = str(uuid.uuid4())[:8]
     shutdown_requests[req_id] = {"target": teammate, "status": "pending"}
     BUS.send("lead", teammate, "Please shut down.", "shutdown_request", {"request_id": req_id})
     return f"Shutdown request {req_id} sent to '{teammate}'"
 
-# === SECTION: plan_approval (s10) ===
+# === 区块：方案审批 (s10) ===
 def handle_plan_review(request_id: str, approve: bool, feedback: str = "") -> str:
     req = plan_requests.get(request_id)
     if not req: return f"Error: Unknown plan request_id '{request_id}'"
@@ -665,7 +663,7 @@ def handle_plan_review(request_id: str, approve: bool, feedback: str = "") -> st
     return f"Plan {req['status']} for '{req['from']}'"
 
 
-# === SECTION: tool_dispatch (s02) ===
+# === 区块：工具分发 (s02) ===
 TOOL_HANDLERS = {
     "bash":             lambda **kw: run_bash(kw["command"], kw.get("tool_use_id", "")),
     "read_file":        lambda **kw: run_read(kw["path"], kw.get("tool_use_id", ""), kw.get("limit")),
@@ -742,27 +740,27 @@ TOOLS = [
 ]
 
 
-# === SECTION: agent_loop ===
+# === 区块：agent 循环 ===
 def agent_loop(messages: list):
     rounds_without_todo = 0
     while True:
-        # s06: compression pipeline
+        # s06：压缩管道
         microcompact(messages)
         if estimate_tokens(messages) > TOKEN_THRESHOLD:
             print("[auto-compact triggered]")
             messages[:] = auto_compact(messages)
-        # s08: drain background notifications
+        # s08：排空后台通知
         notifs = BG.drain()
         if notifs:
             txt = "\n".join(f"[bg:{n['task_id']}] {n['status']}: {n['result']}" for n in notifs)
             messages.append({"role": "user", "content": f"<background-results>\n{txt}\n</background-results>"})
             messages.append({"role": "assistant", "content": "Noted background results."})
-        # s10: check lead inbox
+        # s10：检查 lead 收件箱
         inbox = BUS.read_inbox("lead")
         if inbox:
             messages.append({"role": "user", "content": f"<inbox>{json.dumps(inbox, indent=2)}</inbox>"})
             messages.append({"role": "assistant", "content": "Noted inbox messages."})
-        # LLM call
+        # LLM 调用
         response = client.messages.create(
             model=MODEL, system=SYSTEM, messages=messages,
             tools=TOOLS, max_tokens=8000,
@@ -770,7 +768,7 @@ def agent_loop(messages: list):
         messages.append({"role": "assistant", "content": response.content})
         if response.stop_reason != "tool_use":
             return
-        # Tool execution
+        # 工具执行
         results = []
         used_todo = False
         manual_compress = False
@@ -791,18 +789,18 @@ def agent_loop(messages: list):
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": str(output)})
                 if block.name == "TodoWrite":
                     used_todo = True
-        # s03: nag reminder (only when todo workflow is active)
+        # s03：催促提醒（仅当 todo 工作流活跃时）
         rounds_without_todo = 0 if used_todo else rounds_without_todo + 1
         if TODO.has_open_items() and rounds_without_todo >= 3:
             results.insert(0, {"type": "text", "text": "<reminder>Update your todos.</reminder>"})
         messages.append({"role": "user", "content": results})
-        # s06: manual compress
+        # s06：手动压缩
         if manual_compress:
             print("[manual compact]")
             messages[:] = auto_compact(messages, focus=compact_focus)
 
 
-# === SECTION: repl ===
+# === 区块：REPL ===
 if __name__ == "__main__":
     history = []
     while True:

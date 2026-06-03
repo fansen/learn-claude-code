@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-# Harness: context isolation -- protecting the model's clarity of thought.
+# 线束机制：上下文隔离 -- 保护模型的思维清晰度。
 """
-s04_subagent.py - Subagents
+s04_subagent.py - 子 Agent
 
-Spawn a child agent with fresh messages=[]. The child works in its own
-context, sharing the filesystem, then returns only a summary to the parent.
+创建一个 messages=[] 的子 Agent。子 Agent 在独立上下文中工作，
+与父 Agent 共享文件系统，完成后只返回摘要给父 Agent。
 
     Parent agent                     Subagent
     +------------------+             +------------------+
@@ -17,16 +17,15 @@ context, sharing the filesystem, then returns only a summary to the parent.
     |   result = "..." | <--------- | return last text |
     +------------------+             +------------------+
               |
-    Parent context stays clean.
-    Subagent context is discarded.
+    父 Agent 上下文保持干净。
+    子 Agent 上下文被丢弃。
 
-Key insight: "Fresh messages=[] gives context isolation. The parent stays clean."
+核心洞察："messages=[] 提供上下文隔离，父 Agent 保持干净。"
 
-Note: Real Claude Code also uses in-process isolation (not OS-level process
-forking). The child runs in the same process with a fresh message array and
-isolated tool context -- same pattern as this teaching implementation.
+注意：真实的 Claude Code 也使用进程内隔离（而非操作系统级进程 fork）。
+子 Agent 在同一进程中以全新的消息数组和隔离的工具上下文运行 -- 与本教学实现相同的模式。
 
-    Comparison with real Claude Code:
+    与真实 Claude Code 的对比：
     +-------------------+------------------+----------------------------------+
     | Aspect            | This demo        | Real Claude Code                 |
     +-------------------+------------------+----------------------------------+
@@ -66,13 +65,13 @@ SUBAGENT_SYSTEM = f"You are a coding subagent at {WORKDIR}. Complete the given t
 
 class AgentTemplate:
     """
-    Parse agent definition from markdown frontmatter.
+    从 Markdown frontmatter 解析 Agent 定义。
 
-    Real Claude Code loads agent definitions from .claude/agents/*.md.
-    Frontmatter fields: name, tools, disallowedTools, skills, hooks,
+    真实的 Claude Code 从 .claude/agents/*.md 加载 Agent 定义。
+    frontmatter 字段：name, tools, disallowedTools, skills, hooks,
     model, effort, permissionMode, maxTurns, memory, isolation, color,
-    background, initialPrompt, mcpServers.
-    3 sources: built-in, custom (.claude/agents/), plugin-provided.
+    background, initialPrompt, mcpServers。
+    3 个来源：内置、自定义（.claude/agents/）、插件提供。
     """
     def __init__(self, path):
         self.path = Path(path)
@@ -95,7 +94,7 @@ class AgentTemplate:
         self.name = self.config.get("name", self.name)
 
 
-# -- Tool implementations shared by parent and child --
+# -- 父子 Agent 共享的工具实现 --
 def safe_path(p: str) -> Path:
     path = (WORKDIR / p).resolve()
     if not path.is_relative_to(WORKDIR):
@@ -153,7 +152,7 @@ TOOL_HANDLERS = {
     "edit_file":  lambda **kw: run_edit(kw["path"], kw["old_text"], kw["new_text"]),
 }
 
-# Child gets all base tools except task (no recursive spawning)
+# 子 Agent 拥有所有基础工具，但没有 task 工具（防止递归创建子 Agent）
 CHILD_TOOLS = [
     {"name": "bash", "description": "Run a shell command.",
      "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
@@ -166,10 +165,10 @@ CHILD_TOOLS = [
 ]
 
 
-# -- Subagent: fresh context, filtered tools, summary-only return --
+# -- 子 Agent：全新上下文、过滤后的工具、仅返回摘要 --
 def run_subagent(prompt: str) -> str:
-    sub_messages = [{"role": "user", "content": prompt}]  # fresh context
-    for _ in range(30):  # safety limit
+    sub_messages = [{"role": "user", "content": prompt}]  # 全新上下文
+    for _ in range(30):  # 安全上限
         response = client.messages.create(
             model=MODEL, system=SUBAGENT_SYSTEM, messages=sub_messages,
             tools=CHILD_TOOLS, max_tokens=8000,
@@ -184,11 +183,11 @@ def run_subagent(prompt: str) -> str:
                 output = handler(**block.input) if handler else f"Unknown tool: {block.name}"
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": str(output)[:50000]})
         sub_messages.append({"role": "user", "content": results})
-    # Only the final text returns to the parent -- child context is discarded
+    # 只有最终文本返回给父 Agent -- 子 Agent 上下文被丢弃
     return "".join(b.text for b in response.content if hasattr(b, "text")) or "(no summary)"
 
 
-# -- Parent tools: base tools + task dispatcher --
+# -- 父 Agent 工具：基础工具 + task 分发器 --
 PARENT_TOOLS = CHILD_TOOLS + [
     {"name": "task", "description": "Spawn a subagent with fresh context. It shares the filesystem but not conversation history.",
      "input_schema": {"type": "object", "properties": {"prompt": {"type": "string"}, "description": {"type": "string", "description": "Short description of the task"}}, "required": ["prompt"]}},

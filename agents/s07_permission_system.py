@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
-# Harness: safety -- the pipeline between intent and execution.
+# 线束：安全性 -- 在意图与执行之间的管道。
 """
-s07_permission_system.py - Permission System
+s07_permission_system.py - 权限系统
 
-Every tool call passes through a permission pipeline before execution.
+每个工具调用在执行前都要经过权限管道。
 
-Teaching pipeline:
-  1. deny rules
-  2. mode check
-  3. allow rules
-  4. ask user
+教学版管道：
+  1. deny 规则
+  2. 模式检查
+  3. allow 规则
+  4. 询问用户
 
-This version intentionally teaches three modes first:
+本版本有意先教三种模式：
   - default
   - plan
   - auto
 
-That is enough to build a real, understandable permission system without
-burying readers under every advanced policy branch on day one.
+这已足够构建一个真实、可理解的权限系统，
+无需在第一天就让读者淹没在所有高级策略分支中。
 
-Key insight: "Safety is a pipeline, not a boolean."
+核心洞察："安全是一条管道，不是一个布尔值。"
 """
 
 import json
@@ -41,40 +41,39 @@ WORKDIR = Path.cwd()
 client = Anthropic(base_url=os.getenv("ANTHROPIC_BASE_URL"))
 MODEL = os.environ["MODEL_ID"]
 
-# -- Permission modes --
-# Teaching version starts with three clear modes first.
+# -- 权限模式 --
+# 教学版先从三种清晰的模式开始。
 MODES = ("default", "plan", "auto")
 
 READ_ONLY_TOOLS = {"read_file", "bash_readonly"}
 
-# Tools that modify state
+# 会修改状态的工具
 WRITE_TOOLS = {"write_file", "edit_file", "bash"}
 
 
-# -- Bash security validation --
+# -- Bash 安全校验 --
 class BashSecurityValidator:
     """
-    Validate bash commands for obviously dangerous patterns.
+    校验 bash 命令中是否包含明显危险的模式。
 
-    The teaching version deliberately keeps this small and easy to read.
-    First catch a few high-risk patterns, then let the permission pipeline
-    decide whether to deny or ask the user.
+    教学版刻意保持小巧、易读。
+    先捕获几种高风险模式，再让权限管道决定是拒绝还是询问用户。
     """
 
     VALIDATORS = [
-        ("shell_metachar", r"[;&|`$]"),       # shell metacharacters
-        ("sudo", r"\bsudo\b"),                 # privilege escalation
-        ("rm_rf", r"\brm\s+(-[a-zA-Z]*)?r"),  # recursive delete
-        ("cmd_substitution", r"\$\("),          # command substitution
-        ("ifs_injection", r"\bIFS\s*="),        # IFS manipulation
+        ("shell_metachar", r"[;&|`$]"),       # shell 元字符
+        ("sudo", r"\bsudo\b"),                 # 提权
+        ("rm_rf", r"\brm\s+(-[a-zA-Z]*)?r"),  # 递归删除
+        ("cmd_substitution", r"\$\("),          # 命令替换
+        ("ifs_injection", r"\bIFS\s*="),        # IFS 注入
     ]
 
     def validate(self, command: str) -> list:
         """
-        Check a bash command against all validators.
+        对 bash 命令运行所有校验器。
 
-        Returns list of (validator_name, matched_pattern) tuples for failures.
-        An empty list means the command passed all validators.
+        返回 (validator_name, matched_pattern) 元组列表，表示未通过的项。
+        空列表表示命令通过了所有校验。
         """
         failures = []
         for name, pattern in self.VALIDATORS:
@@ -83,11 +82,11 @@ class BashSecurityValidator:
         return failures
 
     def is_safe(self, command: str) -> bool:
-        """Convenience: returns True only if no validators triggered."""
+        """便捷方法：仅当没有任何校验器触发时返回 True。"""
         return len(self.validate(command)) == 0
 
     def describe_failures(self, command: str) -> str:
-        """Human-readable summary of validation failures."""
+        """生成校验失败的人类可读摘要。"""
         failures = self.validate(command)
         if not failures:
             return "No issues detected"
@@ -95,43 +94,42 @@ class BashSecurityValidator:
         return "Security flags: " + ", ".join(parts)
 
 
-# -- Workspace trust --
+# -- 工作区信任 --
 def is_workspace_trusted(workspace: Path = None) -> bool:
     """
-    Check if a workspace has been explicitly marked as trusted.
+    检查工作区是否已被显式标记为受信任。
 
-    The teaching version uses a simple marker file. A more complete system
-    can layer richer trust flows on top of the same idea.
+    教学版使用简单的标记文件。更完整的系统可以在此基础上叠加更丰富的信任机制。
     """
     ws = workspace or WORKDIR
     trust_marker = ws / ".claude" / ".claude_trusted"
     return trust_marker.exists()
 
 
-# Singleton validator instance used by the permission pipeline
+# 权限管道使用的单例校验器实例
 bash_validator = BashSecurityValidator()
 
 
-# -- Permission rules --
-# Rules are checked in order: first match wins.
-# Format: {"tool": "<tool_name_or_*>", "path": "<glob_or_*>", "behavior": "allow|deny|ask"}
+# -- 权限规则 --
+# 规则按顺序检查：首次匹配即生效。
+# 格式: {"tool": "<tool_name_or_*>", "path": "<glob_or_*>", "behavior": "allow|deny|ask"}
 DEFAULT_RULES = [
-    # Always deny dangerous patterns
+    # 始终拒绝危险模式
     {"tool": "bash", "content": "rm -rf /", "behavior": "deny"},
     {"tool": "bash", "content": "sudo *", "behavior": "deny"},
-    # Allow reading anything
+    # 允许读取任何文件
     {"tool": "read_file", "path": "*", "behavior": "allow"},
 ]
 
 
 class PermissionManager:
     """
-    Manages permission decisions for tool calls.
+    管理工具调用的权限决策。
 
-    Pipeline: deny_rules -> mode_check -> allow_rules -> ask_user
+    管道: deny_rules -> mode_check -> allow_rules -> ask_user
 
-    The teaching version keeps the decision path short on purpose so readers
-    can implement it themselves before adding more advanced policy layers.
+    教学版刻意保持决策路径简短，让读者可以自行实现，
+    然后再添加更高级的策略层。
     """
 
     def __init__(self, mode: str = "default", rules: list = None):
@@ -139,8 +137,7 @@ class PermissionManager:
             raise ValueError(f"Unknown mode: {mode}. Choose from {MODES}")
         self.mode = mode
         self.rules = rules or list(DEFAULT_RULES)
-        # Simple denial tracking helps surface when the agent is repeatedly
-        # asking for actions the system will not allow.
+        # 简单的拒绝追踪，帮助发现 agent 反复请求系统不允许的操作。
         self.consecutive_denials = 0
         self.max_consecutive_denials = 3
 
@@ -148,25 +145,25 @@ class PermissionManager:
         """
         Returns: {"behavior": "allow"|"deny"|"ask", "reason": str}
         """
-        # Step 0: Bash security validation (before deny rules)
-        # Teaching version checks early for clarity.
+        # 第 0 步：Bash 安全校验（在 deny 规则之前）
+        # 教学版提前检查，便于理解。
         if tool_name == "bash":
             command = tool_input.get("command", "")
             failures = bash_validator.validate(command)
             if failures:
-                # Severe patterns (sudo, rm_rf) get immediate deny
+                # 严重模式（sudo, rm_rf）立即拒绝
                 severe = {"sudo", "rm_rf"}
                 severe_hits = [f for f in failures if f[0] in severe]
                 if severe_hits:
                     desc = bash_validator.describe_failures(command)
                     return {"behavior": "deny",
                             "reason": f"Bash validator: {desc}"}
-                # Other patterns escalate to ask (user can still approve)
+                # 其他模式升级为询问（用户仍可批准）
                 desc = bash_validator.describe_failures(command)
                 return {"behavior": "ask",
                         "reason": f"Bash validator flagged: {desc}"}
 
-        # Step 1: Deny rules (bypass-immune, checked first always)
+        # 第 1 步：Deny 规则（不可绕过，始终最先检查）
         for rule in self.rules:
             if rule["behavior"] != "deny":
                 continue
@@ -174,23 +171,23 @@ class PermissionManager:
                 return {"behavior": "deny",
                         "reason": f"Blocked by deny rule: {rule}"}
 
-        # Step 2: Mode-based decisions
+        # 第 2 步：基于模式的决策
         if self.mode == "plan":
-            # Plan mode: deny all write operations, allow reads
+            # Plan 模式：拒绝所有写操作，允许读取
             if tool_name in WRITE_TOOLS:
                 return {"behavior": "deny",
                         "reason": "Plan mode: write operations are blocked"}
             return {"behavior": "allow", "reason": "Plan mode: read-only allowed"}
 
         if self.mode == "auto":
-            # Auto mode: auto-allow read-only tools, ask for writes
+            # Auto 模式：自动允许只读工具，写操作需询问
             if tool_name in READ_ONLY_TOOLS or tool_name == "read_file":
                 return {"behavior": "allow",
                         "reason": "Auto mode: read-only tool auto-approved"}
-            # Teaching: fall through to allow rules, then ask
+            # 教学版：继续向下检查 allow 规则，然后询问
             pass
 
-        # Step 3: Allow rules
+        # 第 3 步：Allow 规则
         for rule in self.rules:
             if rule["behavior"] != "allow":
                 continue
@@ -199,12 +196,12 @@ class PermissionManager:
                 return {"behavior": "allow",
                         "reason": f"Matched allow rule: {rule}"}
 
-        # Step 4: Ask user (default behavior for unmatched tools)
+        # 第 4 步：询问用户（未匹配工具的默认行为）
         return {"behavior": "ask",
                 "reason": f"No rule matched for {tool_name}, asking user"}
 
     def ask_user(self, tool_name: str, tool_input: dict) -> bool:
-        """Interactive approval prompt. Returns True if approved."""
+        """交互式审批提示。批准返回 True。"""
         preview = json.dumps(tool_input, ensure_ascii=False)[:200]
         print(f"\n  [Permission] {tool_name}: {preview}")
         try:
@@ -213,7 +210,7 @@ class PermissionManager:
             return False
 
         if answer == "always":
-            # Add permanent allow rule for this tool
+            # 为该工具添加永久 allow 规则
             self.rules.append({"tool": tool_name, "path": "*", "behavior": "allow"})
             self.consecutive_denials = 0
             return True
@@ -221,7 +218,7 @@ class PermissionManager:
             self.consecutive_denials = 0
             return True
 
-        # Track denials for circuit breaker
+        # 追踪拒绝次数，用于熔断
         self.consecutive_denials += 1
         if self.consecutive_denials >= self.max_consecutive_denials:
             print(f"  [{self.consecutive_denials} consecutive denials -- "
@@ -229,17 +226,17 @@ class PermissionManager:
         return False
 
     def _matches(self, rule: dict, tool_name: str, tool_input: dict) -> bool:
-        """Check if a rule matches the tool call."""
-        # Tool name match
+        """检查规则是否匹配该工具调用。"""
+        # 工具名匹配
         if rule.get("tool") and rule["tool"] != "*":
             if rule["tool"] != tool_name:
                 return False
-        # Path pattern match
+        # 路径模式匹配
         if "path" in rule and rule["path"] != "*":
             path = tool_input.get("path", "")
             if not fnmatch(path, rule["path"]):
                 return False
-        # Content pattern match (for bash commands)
+        # 内容模式匹配（用于 bash 命令）
         if "content" in rule:
             command = tool_input.get("command", "")
             if not fnmatch(command, rule["content"]):
@@ -247,7 +244,7 @@ class PermissionManager:
         return True
 
 
-# -- Tool implementations --
+# -- 工具实现 --
 def safe_path(p: str) -> Path:
     path = (WORKDIR / p).resolve()
     if not path.is_relative_to(WORKDIR):
@@ -321,13 +318,13 @@ The user controls permissions. Some tool calls may be denied."""
 
 def agent_loop(messages: list, perms: PermissionManager):
     """
-    The permission-aware agent loop.
+    带权限感知的 agent 循环。
 
-    For each tool call:
-      1. LLM requests tool use
-      2. Permission pipeline checks: deny_rules -> mode -> allow_rules -> ask
-      3. If allowed: execute tool, return result
-      4. If denied: return rejection message to LLM
+    对每个工具调用：
+      1. LLM 请求 tool_use
+      2. 权限管道检查：deny_rules -> mode -> allow_rules -> ask
+      3. 如果允许：执行工具，返回结果
+      4. 如果拒绝：向 LLM 返回拒绝消息
     """
     while True:
         response = client.messages.create(
@@ -344,7 +341,7 @@ def agent_loop(messages: list, perms: PermissionManager):
             if block.type != "tool_use":
                 continue
 
-            # -- Permission check --
+            # -- 权限检查 --
             decision = perms.check(block.name, block.input or {})
 
             if decision["behavior"] == "deny":
@@ -360,7 +357,7 @@ def agent_loop(messages: list, perms: PermissionManager):
                     output = f"Permission denied by user for {block.name}"
                     print(f"  [USER DENIED] {block.name}")
 
-            else:  # allow
+            else:  # 允许
                 handler = TOOL_HANDLERS.get(block.name)
                 output = handler(**(block.input or {})) if handler else f"Unknown: {block.name}"
                 print(f"> {block.name}: {str(output)[:200]}")
@@ -375,7 +372,7 @@ def agent_loop(messages: list, perms: PermissionManager):
 
 
 if __name__ == "__main__":
-    # Choose permission mode at startup
+    # 启动时选择权限模式
     print("Permission modes: default, plan, auto")
     mode_input = input("Mode (default): ").strip().lower() or "default"
     if mode_input not in MODES:
@@ -393,7 +390,7 @@ if __name__ == "__main__":
         if query.strip().lower() in ("q", "exit", ""):
             break
 
-        # /mode command to switch modes at runtime
+        # /mode 命令：运行时切换模式
         if query.startswith("/mode"):
             parts = query.split()
             if len(parts) == 2 and parts[1] in MODES:
@@ -403,7 +400,7 @@ if __name__ == "__main__":
                 print(f"Usage: /mode <{'|'.join(MODES)}>")
             continue
 
-        # /rules command to show current rules
+        # /rules 命令：显示当前规则
         if query.strip() == "/rules":
             for i, rule in enumerate(perms.rules):
                 print(f"  {i}: {rule}")

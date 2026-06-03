@@ -1,43 +1,42 @@
 #!/usr/bin/env python3
-# Harness: persistent tasks -- goals that outlive any single conversation.
+# 线束：持久化任务 -- 超越单次对话生命周期的目标。
 """
-s12_task_system.py - Tasks
+s12_task_system.py - 任务系统
 
-Tasks persist as JSON files in .tasks/ so they survive context compression.
-Each task carries a small dependency graph:
+任务以 JSON 文件持久化在 .tasks/ 中，因此能在上下文压缩后存活。
+每个任务携带一个简单的依赖图：
 
-- blockedBy: what must finish first
-- blocks: what this task unlocks later
+- blockedBy：必须先完成的前置任务
+- blocks：本任务完成后解锁的后续任务
 
     .tasks/
       task_1.json  {"id":1, "subject":"...", "status":"completed", ...}
       task_2.json  {"id":2, "blockedBy":[1], "status":"pending", ...}
       task_3.json  {"id":3, "blockedBy":[2], "blocks":[], ...}
 
-    Dependency resolution:
+    依赖解析：
     +----------+     +----------+     +----------+
     | task 1   | --> | task 2   | --> | task 3   |
     | complete |     | blocked  |     | blocked  |
     +----------+     +----------+     +----------+
          |                ^
-         +--- completing task 1 removes it from task 2's blockedBy
+         +--- 完成 task 1 会将其从 task 2 的 blockedBy 中移除
 
-Key idea: task state survives compression because it lives on disk, not only
-inside the conversation.
-These are durable work-graph tasks, not transient runtime execution slots.
+核心思想：任务状态因为存在磁盘上（而不仅在对话中）所以能在压缩后存活。
+这些是持久化的工作图任务，不是瞬态的运行时执行槽。
 
-Read this file in this order:
-1. TaskManager: what a TaskRecord looks like on disk.
-2. TOOL_HANDLERS / TOOLS: how task operations enter the same loop as normal tools.
-3. agent_loop: how persistent work state is exposed back to the model.
+按以下顺序阅读本文件：
+1. TaskManager：TaskRecord 在磁盘上的样子。
+2. TOOL_HANDLERS / TOOLS：任务操作如何与普通工具进入同一个循环。
+3. agent_loop：持久化的工作状态如何暴露给模型。
 
-Most common confusion:
-- a task record is a durable work item
-- it is not a thread, background slot, or worker process
+最常见的混淆：
+- 任务记录是持久化的工作项
+- 它不是线程、后台槽位或工作进程
 
-Teaching boundary:
-this chapter teaches the durable work graph first.
-Runtime execution slots and schedulers arrive later.
+教学边界：
+本章先教持久化工作图。
+运行时执行槽和调度器在后续章节。
 """
 
 import json
@@ -61,11 +60,11 @@ TASKS_DIR = WORKDIR / ".tasks"
 SYSTEM = f"You are a coding agent at {WORKDIR}. Use task tools to plan and track work."
 
 
-# -- TaskManager: CRUD for a persistent task graph --
+# -- TaskManager：持久化任务图的 CRUD --
 class TaskManager:
-    """Persistent TaskRecord store.
+    """持久化 TaskRecord 存储。
 
-    Think "work graph on disk", not "currently running worker".
+    请理解为"磁盘上的工作图"，而不是"正在运行的 worker"。
     """
 
     def __init__(self, tasks_dir: Path):
@@ -108,14 +107,14 @@ class TaskManager:
             if status not in ("pending", "in_progress", "completed", "deleted"):
                 raise ValueError(f"Invalid status: {status}")
             task["status"] = status
-            # When a task is completed, remove it from all other tasks' blockedBy
+            # 任务完成时，从其他所有任务的 blockedBy 中移除它
             if status == "completed":
                 self._clear_dependency(task_id)
         if add_blocked_by:
             task["blockedBy"] = list(set(task["blockedBy"] + add_blocked_by))
         if add_blocks:
             task["blocks"] = list(set(task["blocks"] + add_blocks))
-            # Bidirectional: also update the blocked tasks' blockedBy lists
+            # 双向更新：同时更新被阻塞任务的 blockedBy 列表
             for blocked_id in add_blocks:
                 try:
                     blocked = self._load(blocked_id)
@@ -128,7 +127,7 @@ class TaskManager:
         return json.dumps(task, indent=2)
 
     def _clear_dependency(self, completed_id: int):
-        """Remove completed_id from all other tasks' blockedBy lists."""
+        """从其他所有任务的 blockedBy 列表中移除 completed_id。"""
         for f in self.dir.glob("task_*.json"):
             task = json.loads(f.read_text())
             if completed_id in task.get("blockedBy", []):
@@ -153,7 +152,7 @@ class TaskManager:
 TASKS = TaskManager(TASKS_DIR)
 
 
-# -- Base tool implementations --
+# -- 基础工具实现 --
 def safe_path(p: str) -> Path:
     path = (WORKDIR / p).resolve()
     if not path.is_relative_to(WORKDIR):

@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-# Harness: time -- the agent schedules its own future work.
+# 线束机制：时间 -- Agent 自行调度未来的工作
 """
-s14_cron_scheduler.py - Cron / Scheduled Tasks
+s14_cron_scheduler.py - Cron 定时任务
 
-The agent can schedule prompts for future execution using standard cron
-expressions. When a schedule matches the current time, it pushes a
-notification back into the main conversation loop.
+Agent 可以使用标准 cron 表达式调度 prompt 在未来执行。当调度时间匹配当前时间时，
+会将通知推入主对话循环。
 
     Cron expression: 5 fields
     +-------+-------+-------+-------+-------+
@@ -17,20 +16,19 @@ notification back into the main conversation loop.
       "0 9 * * 1"     -> Monday 9:00 AM
       "30 14 * * *"   -> daily 2:30 PM
 
-    Two persistence modes:
+    两种持久化模式：
     +--------------------+-------------------------------+
-    | session-only       | In-memory list, lost on exit  |
+    | session-only       | 内存列表，退出即丢失          |
     | durable            | .claude/scheduled_tasks.json  |
     +--------------------+-------------------------------+
 
-    Two trigger modes:
+    两种触发模式：
     +--------------------+-------------------------------+
-    | recurring          | Repeats until deleted or      |
-    |                    | 7-day auto-expiry             |
-    | one-shot           | Fires once, then auto-deleted |
+    | recurring          | 重复执行直到删除或 7 天自动过期 |
+    | one-shot           | 执行一次后自动删除             |
     +--------------------+-------------------------------+
 
-    Jitter: recurring tasks can avoid exact minute boundaries.
+    Jitter（抖动）：recurring 任务可以避开整分钟边界。
 
     Architecture:
     +-------------------------------+
@@ -50,8 +48,7 @@ notification back into the main conversation loop.
               v
     [injected as user messages before LLM call]
 
-Key idea: scheduling remembers future work, then hands it back to the
-same main loop when the time arrives.
+核心思想：调度记住未来的工作，时间到了再交回同一个主循环处理。
 """
 
 import json
@@ -79,14 +76,14 @@ MODEL = os.environ["MODEL_ID"]
 SCHEDULED_TASKS_FILE = WORKDIR / ".claude" / "scheduled_tasks.json"
 CRON_LOCK_FILE = WORKDIR / ".claude" / "cron.lock"
 AUTO_EXPIRY_DAYS = 7
-JITTER_MINUTES = [0, 30]  # avoid these exact minutes for recurring tasks
-JITTER_OFFSET_MAX = 4     # offset range in minutes
-# Teaching version: use a simple 1-4 minute offset when needed.
+JITTER_MINUTES = [0, 30]  # recurring 任务避开这些整分钟
+JITTER_OFFSET_MAX = 4     # 偏移范围（分钟）
+# 教学版本：需要时使用简单的 1-4 分钟偏移。
 
 
 class CronLock:
     """
-    PID-file-based lock to prevent multiple sessions from firing the same cron job.
+    基于 PID 文件的锁，防止多个会话触发同一个 cron 任务。
     """
 
     def __init__(self, lock_path: Path = None):
@@ -94,27 +91,27 @@ class CronLock:
 
     def acquire(self) -> bool:
         """
-        Try to acquire the cron lock. Returns True on success.
+        尝试获取 cron 锁。成功返回 True。
 
-        If a lock file exists, check whether the PID inside is still alive.
-        If the process is dead the lock is stale and we can take over.
+        如果锁文件存在，检查其中的 PID 对应进程是否仍然存活。
+        如果进程已死，说明锁已过期，可以接管。
         """
         if self._lock_path.exists():
             try:
                 stored_pid = int(self._lock_path.read_text().strip())
-                # PID liveness probe: send signal 0 (no-op) to check existence
+                # PID 存活探测：发送信号 0（无操作）检查进程是否存在
                 os.kill(stored_pid, 0)
-                # Process is alive -- lock is held by another session
+                # 进程存活 -- 锁被另一个会话持有
                 return False
             except (ValueError, ProcessLookupError, PermissionError, OSError):
-                # Stale lock (process dead or PID unparseable) -- remove it
+                # 过期锁（进程已死或 PID 无法解析）-- 移除
                 pass
         self._lock_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock_path.write_text(str(os.getpid()))
         return True
 
     def release(self):
-        """Remove the lock file if it belongs to this process."""
+        """如果锁文件属于当前进程则移除。"""
         try:
             if self._lock_path.exists():
                 stored_pid = int(self._lock_path.read_text().strip())
@@ -126,19 +123,19 @@ class CronLock:
 
 def cron_matches(expr: str, dt: datetime) -> bool:
     """
-    Check if a 5-field cron expression matches a given datetime.
+    检查 5 字段 cron 表达式是否匹配给定的 datetime。
 
-    Fields: minute hour day-of-month month day-of-week
-    Supports: * (any), */N (every N), N (exact), N-M (range), N,M (list)
+    字段：minute hour day-of-month month day-of-week
+    支持：*（任意）、*/N（每 N）、N（精确）、N-M（范围）、N,M（列表）
 
-    No external dependencies -- simple manual matching.
+    无外部依赖 -- 简单手动匹配。
     """
     fields = expr.strip().split()
     if len(fields) != 5:
         return False
 
     values = [dt.minute, dt.hour, dt.day, dt.month, dt.weekday()]
-    # Python weekday: 0=Monday; cron: 0=Sunday. Convert.
+    # Python weekday：0=周一；cron：0=周日。需要转换。
     cron_dow = (dt.weekday() + 1) % 7
     values[4] = cron_dow
     ranges = [(0, 59), (0, 23), (1, 31), (1, 12), (0, 6)]
@@ -150,29 +147,29 @@ def cron_matches(expr: str, dt: datetime) -> bool:
 
 
 def _field_matches(field: str, value: int, lo: int, hi: int) -> bool:
-    """Match a single cron field against a value."""
+    """匹配单个 cron 字段与值。"""
     if field == "*":
         return True
 
     for part in field.split(","):
-        # Handle step: */N or N-M/S
+        # 处理步长：*/N 或 N-M/S
         step = 1
         if "/" in part:
             part, step_str = part.split("/", 1)
             step = int(step_str)
 
         if part == "*":
-            # */N -- check if value is on the step grid
+            # */N -- 检查值是否在步长网格上
             if (value - lo) % step == 0:
                 return True
         elif "-" in part:
-            # Range: N-M
+            # 范围：N-M
             start, end = part.split("-", 1)
             start, end = int(start), int(end)
             if start <= value <= end and (value - start) % step == 0:
                 return True
         else:
-            # Exact value
+            # 精确值
             if int(part) == value:
                 return True
 
@@ -181,21 +178,20 @@ def _field_matches(field: str, value: int, lo: int, hi: int) -> bool:
 
 class CronScheduler:
     """
-    Manage scheduled tasks with background checking.
+    管理定时任务的后台检查。
 
-    Teaching version keeps only the core pieces: schedule records, a
-    minute checker, optional persistence, and a notification queue.
+    教学版本只保留核心部件：调度记录、分钟检查器、可选持久化和通知队列。
     """
 
     def __init__(self):
-        self.tasks = []        # list of task dicts
-        self.queue = Queue()   # notification queue
+        self.tasks = []        # 任务字典列表
+        self.queue = Queue()   # 通知队列
         self._stop_event = threading.Event()
         self._thread = None
-        self._last_check_minute = -1  # avoid double-firing within same minute
+        self._last_check_minute = -1  # 避免同一分钟内重复触发
 
     def start(self):
-        """Load durable tasks and start the background check thread."""
+        """加载持久化任务并启动后台检查线程。"""
         self._load_durable()
         self._thread = threading.Thread(target=self._check_loop, daemon=True)
         self._thread.start()
@@ -204,14 +200,14 @@ class CronScheduler:
             print(f"[Cron] Loaded {count} scheduled tasks")
 
     def stop(self):
-        """Stop the background thread."""
+        """停止后台线程。"""
         self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=2)
 
     def create(self, cron_expr: str, prompt: str,
                recurring: bool = True, durable: bool = False) -> str:
-        """Create a new scheduled task. Returns the task ID."""
+        """创建新的定时任务。返回任务 ID。"""
         task_id = str(uuid.uuid4())[:8]
         now = time.time()
 
@@ -224,8 +220,8 @@ class CronScheduler:
             "createdAt": now,
         }
 
-        # Jitter for recurring tasks: if the cron fires on :00 or :30,
-        # note it so we can offset the check slightly
+        # recurring 任务的 jitter：如果 cron 在 :00 或 :30 触发，
+        # 记录下来以便稍微偏移检查时间
         if recurring:
             task["jitter_offset"] = self._compute_jitter(cron_expr)
 
@@ -238,7 +234,7 @@ class CronScheduler:
         return f"Created task {task_id} ({mode}, {store}): cron={cron_expr}"
 
     def delete(self, task_id: str) -> str:
-        """Delete a scheduled task by ID."""
+        """按 ID 删除定时任务。"""
         before = len(self.tasks)
         self.tasks = [t for t in self.tasks if t["id"] != task_id]
         if len(self.tasks) < before:
@@ -247,7 +243,7 @@ class CronScheduler:
         return f"Task {task_id} not found"
 
     def list_tasks(self) -> str:
-        """List all scheduled tasks."""
+        """列出所有定时任务。"""
         if not self.tasks:
             return "No scheduled tasks."
         lines = []
@@ -262,7 +258,7 @@ class CronScheduler:
         return "\n".join(lines)
 
     def drain_notifications(self) -> list[str]:
-        """Drain all pending notifications from the queue."""
+        """排空队列中所有待处理的通知。"""
         notifications = []
         while True:
             try:
@@ -272,7 +268,7 @@ class CronScheduler:
         return notifications
 
     def _compute_jitter(self, cron_expr: str) -> int:
-        """If cron targets :00 or :30, return a small offset (1-4 minutes)."""
+        """如果 cron 目标为 :00 或 :30，返回一个小偏移量（1-4 分钟）。"""
         fields = cron_expr.strip().split()
         if len(fields) < 1:
             return 0
@@ -280,19 +276,19 @@ class CronScheduler:
         try:
             minute_val = int(minute_field)
             if minute_val in JITTER_MINUTES:
-                # Deterministic jitter based on the expression hash
+                # 基于表达式哈希的确定性 jitter
                 return (hash(cron_expr) % JITTER_OFFSET_MAX) + 1
         except ValueError:
             pass
         return 0
 
     def _check_loop(self):
-        """Background thread: check every second if any task is due."""
+        """后台线程：每秒检查是否有任务到期。"""
         while not self._stop_event.is_set():
             now = datetime.now()
             current_minute = now.hour * 60 + now.minute
 
-            # Only check once per minute to avoid double-firing
+            # 每分钟只检查一次，避免重复触发
             if current_minute != self._last_check_minute:
                 self._last_check_minute = current_minute
                 self._check_tasks(now)
@@ -300,18 +296,18 @@ class CronScheduler:
             self._stop_event.wait(timeout=1)
 
     def _check_tasks(self, now: datetime):
-        """Check all tasks against current time, fire matches."""
+        """将所有任务与当前时间比对，触发匹配的任务。"""
         expired = []
         fired_oneshots = []
 
         for task in self.tasks:
-            # Auto-expiry: recurring tasks older than 7 days
+            # 自动过期：超过 7 天的 recurring 任务
             age_days = (time.time() - task["createdAt"]) / 86400
             if task["recurring"] and age_days > AUTO_EXPIRY_DAYS:
                 expired.append(task["id"])
                 continue
 
-            # Apply jitter offset for the match check
+            # 匹配检查时应用 jitter 偏移
             check_time = now
             jitter = task.get("jitter_offset", 0)
             if jitter:
@@ -328,7 +324,7 @@ class CronScheduler:
                 if not task["recurring"]:
                     fired_oneshots.append(task["id"])
 
-        # Clean up expired and one-shot tasks
+        # 清理过期和 one-shot 任务
         if expired or fired_oneshots:
             remove_ids = set(expired) | set(fired_oneshots)
             self.tasks = [t for t in self.tasks if t["id"] not in remove_ids]
@@ -339,25 +335,23 @@ class CronScheduler:
             self._save_durable()
 
     def _load_durable(self):
-        """Load durable tasks from .claude/scheduled_tasks.json."""
+        """从 .claude/scheduled_tasks.json 加载持久化任务。"""
         if not SCHEDULED_TASKS_FILE.exists():
             return
         try:
             data = json.loads(SCHEDULED_TASKS_FILE.read_text())
-            # Only load durable tasks
+            # 只加载持久化任务
             self.tasks = [t for t in data if t.get("durable")]
         except Exception as e:
             print(f"[Cron] Error loading tasks: {e}")
 
     def detect_missed_tasks(self) -> list[dict]:
         """
-        On startup, check each durable task's last_fired time.
+        启动时检查每个持久化任务的 last_fired 时间。
 
-        If a task should have fired while the session was closed (i.e.
-        the gap between last_fired and now contains at least one cron match),
-        flag it as missed. The caller can then let the user decide whether
-        to run or discard each missed task.
-
+        如果某个任务在会话关闭期间应该触发过（即 last_fired 到现在之间
+        存在至少一个 cron 匹配），则标记为 missed。调用方可以让用户决定
+        是执行还是丢弃每个错过的任务。
         """
         now = datetime.now()
         missed = []
@@ -366,7 +360,7 @@ class CronScheduler:
             if last_fired is None:
                 continue
             last_dt = datetime.fromtimestamp(last_fired)
-            # Walk forward minute-by-minute from last_fired to now (cap at 24h)
+            # 从 last_fired 逐分钟向前遍历到现在（上限 24 小时）
             check = last_dt + timedelta(minutes=1)
             cap = min(now, last_dt + timedelta(hours=24))
             while check <= cap:
@@ -377,12 +371,12 @@ class CronScheduler:
                         "prompt": task["prompt"],
                         "missed_at": check.isoformat(),
                     })
-                    break  # one miss is enough to flag it
+                    break  # 一次 miss 就足以标记
                 check += timedelta(minutes=1)
         return missed
 
     def _save_durable(self):
-        """Save durable tasks to disk."""
+        """将持久化任务保存到磁盘。"""
         durable = [t for t in self.tasks if t.get("durable")]
         SCHEDULED_TASKS_FILE.parent.mkdir(parents=True, exist_ok=True)
         SCHEDULED_TASKS_FILE.write_text(
@@ -390,11 +384,11 @@ class CronScheduler:
         )
 
 
-# Global scheduler
+# 全局调度器
 scheduler = CronScheduler()
 
 
-# -- Tool implementations --
+# -- 工具实现 --
 def safe_path(p: str) -> Path:
     path = (WORKDIR / p).resolve()
     if not path.is_relative_to(WORKDIR):
@@ -487,14 +481,13 @@ SYSTEM = f"You are a coding agent at {WORKDIR}. Use tools to solve tasks.\n\nYou
 
 def agent_loop(messages: list):
     """
-    Cron-aware agent loop.
+    感知 cron 的 agent 循环。
 
-    Before each LLM call, drain the notification queue and inject any
-    fired task prompts as user messages. This is how the agent "wakes up"
-    to handle scheduled work.
+    每次 LLM 调用前排空通知队列，将触发的任务 prompt 作为 user 消息注入。
+    这就是 agent "醒来"处理定时工作的方式。
     """
     while True:
-        # Drain scheduled task notifications
+        # 排空定时任务通知
         notifications = scheduler.drain_notifications()
         for note in notifications:
             print(f"[Cron notification] {note[:100]}")
@@ -549,7 +542,7 @@ if __name__ == "__main__":
             continue
 
         if query.strip() == "/test":
-            # Manually enqueue a test notification for demonstration
+            # 手动入队一个测试通知用于演示
             scheduler.queue.put("[Scheduled task test-0000]: This is a test notification.")
             print("[Test notification enqueued. It will be injected on your next message.]")
             continue

@@ -188,8 +188,8 @@ def agent_loop(messages: list):
             tools=TOOLS,
             max_tokens=8000,
         )
-        # 2. 把模型的回复追加到对话历史（保持上下文完整）
-        messages.append({"role": "assistant", "content": response.content})
+        # 2. 把模型的回复追加到对话历史（转成 dict，避免 SDK 对象被 normalize_messages 过滤）
+        messages.append({"role": "assistant", "content": [b.model_dump() for b in response.content]})
 
         # 3. 如果模型没有调用工具，说明它已经给出了最终回答，退出循环
         if response.stop_reason != "tool_use":

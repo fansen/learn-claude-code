@@ -1,43 +1,43 @@
 #!/usr/bin/env python3
-# Harness: resilience -- a robust agent recovers instead of crashing.
+# 线束：韧性 -- 健壮的 agent 会恢复而不是崩溃。
 """
-s11_error_recovery.py - Error Recovery
+s11_error_recovery.py - 错误恢复
 
-Teaching demo of three recovery paths:
+三条恢复路径的教学演示：
 
-- continue when output is truncated
-- compact when context grows too large
-- back off when transport errors are temporary
+- 输出被截断时继续
+- 上下文过长时压缩
+- 传输错误为临时性时退避重试
 
     LLM response
          |
          v
     [Check stop_reason]
          |
-         +-- "max_tokens" ----> [Strategy 1: max_output_tokens recovery]
-         |                       Inject continuation message:
+         +-- "max_tokens" ----> [策略 1：max_output_tokens 恢复]
+         |                       注入继续消息：
          |                       "Output limit hit. Continue directly."
-         |                       Retry up to MAX_RECOVERY_ATTEMPTS (3).
-         |                       Counter: max_output_recovery_count
+         |                       最多重试 MAX_RECOVERY_ATTEMPTS (3) 次。
+         |                       计数器：max_output_recovery_count
          |
-         +-- API error -------> [Check error type]
+         +-- API error -------> [检查错误类型]
          |                       |
-         |                       +-- prompt_too_long --> [Strategy 2: compact + retry]
-         |                       |   Trigger auto_compact (LLM summary).
-         |                       |   Replace history with summary.
-         |                       |   Retry the turn.
+         |                       +-- prompt_too_long --> [策略 2：compact + 重试]
+         |                       |   触发 auto_compact（LLM 摘要）。
+         |                       |   用摘要替换历史。
+         |                       |   重试该轮。
          |                       |
-         |                       +-- connection/rate --> [Strategy 3: backoff retry]
-         |                           Exponential backoff: base * 2^attempt + jitter
-         |                           Up to 3 retries.
+         |                       +-- connection/rate --> [策略 3：退避重试]
+         |                           指数退避：base * 2^attempt + jitter
+         |                           最多 3 次重试。
          |
-         +-- "end_turn" -----> [Normal exit]
+         +-- "end_turn" -----> [正常退出]
 
-    Recovery priority (first match wins):
-    1. max_tokens -> inject continuation, retry
-    2. prompt_too_long -> compact, retry
-    3. connection error -> backoff, retry
-    4. all retries exhausted -> fail gracefully
+    恢复优先级（首次匹配生效）：
+    1. max_tokens -> 注入继续消息，重试
+    2. prompt_too_long -> 压缩，重试
+    3. 连接错误 -> 退避，重试
+    4. 所有重试耗尽 -> 优雅失败
 """
 
 import json
@@ -59,11 +59,11 @@ WORKDIR = Path.cwd()
 client = Anthropic(base_url=os.getenv("ANTHROPIC_BASE_URL"))
 MODEL = os.environ["MODEL_ID"]
 
-# Recovery constants
+# 恢复常量
 MAX_RECOVERY_ATTEMPTS = 3
-BACKOFF_BASE_DELAY = 1.0  # seconds
-BACKOFF_MAX_DELAY = 30.0  # seconds
-TOKEN_THRESHOLD = 50000   # chars / 4 ~ tokens for compact trigger
+BACKOFF_BASE_DELAY = 1.0  # 秒
+BACKOFF_MAX_DELAY = 30.0  # 秒
+TOKEN_THRESHOLD = 50000   # 字符数 / 4 ≈ token 数，用于触发 compact
 
 CONTINUATION_MESSAGE = (
     "Output limit hit. Continue directly from where you stopped -- "
@@ -72,13 +72,13 @@ CONTINUATION_MESSAGE = (
 
 
 def estimate_tokens(messages: list) -> int:
-    """Rough token estimate: ~4 chars per token."""
+    """粗略 token 估算：约 4 个字符对应 1 个 token。"""
     return len(json.dumps(messages, default=str)) // 4
 
 
 def auto_compact(messages: list) -> list:
     """
-    Compress conversation history into a short continuation summary.
+    将对话历史压缩为简短的延续摘要。
     """
     conversation_text = json.dumps(messages, default=str)[:80000]
     prompt = (
@@ -109,13 +109,13 @@ def auto_compact(messages: list) -> list:
 
 
 def backoff_delay(attempt: int) -> float:
-    """Exponential backoff with jitter: base * 2^attempt + random(0, 1)."""
+    """指数退避加抖动：base * 2^attempt + random(0, 1)。"""
     delay = min(BACKOFF_BASE_DELAY * (2 ** attempt), BACKOFF_MAX_DELAY)
     jitter = random.uniform(0, 1)
     return delay + jitter
 
 
-# -- Tool implementations --
+# -- 工具实现 --
 def safe_path(p: str) -> Path:
     path = (WORKDIR / p).resolve()
     if not path.is_relative_to(WORKDIR):
@@ -191,16 +191,16 @@ SYSTEM = f"You are a coding agent at {WORKDIR}. Use tools to solve tasks."
 
 def agent_loop(messages: list):
     """
-    Error-recovering agent loop with three paths:
+    具有错误恢复能力的 agent 循环，包含三条路径：
 
-    1. continue after max_tokens
-    2. compact after prompt-too-long
-    3. back off after transient transport failure
+    1. max_tokens 后继续
+    2. prompt-too-long 后压缩
+    3. 临时传输故障后退避重试
     """
     max_output_recovery_count = 0
 
     while True:
-        # -- Attempt the API call with connection retry --
+        # -- 尝试 API 调用，带连接重试 --
         response = None
         for attempt in range(MAX_RECOVERY_ATTEMPTS + 1):
             try:
@@ -208,18 +208,18 @@ def agent_loop(messages: list):
                     model=MODEL, system=SYSTEM, messages=messages,
                     tools=TOOLS, max_tokens=8000,
                 )
-                break  # success
+                break  # 成功
 
             except APIError as e:
                 error_body = str(e).lower()
 
-                # Strategy 2: prompt_too_long -> compact and retry
+                # 策略 2：prompt_too_long -> 压缩并重试
                 if "overlong_prompt" in error_body or ("prompt" in error_body and "long" in error_body):
                     print(f"[Recovery] Prompt too long. Compacting... (attempt {attempt + 1})")
                     messages[:] = auto_compact(messages)
                     continue
 
-                # Strategy 3: connection/rate errors -> backoff
+                # 策略 3：连接/限流错误 -> 退避
                 if attempt < MAX_RECOVERY_ATTEMPTS:
                     delay = backoff_delay(attempt)
                     print(f"[Recovery] API error: {e}. "
@@ -227,12 +227,12 @@ def agent_loop(messages: list):
                     time.sleep(delay)
                     continue
 
-                # All retries exhausted
+                # 所有重试耗尽
                 print(f"[Error] API call failed after {MAX_RECOVERY_ATTEMPTS} retries: {e}")
                 return
 
             except (ConnectionError, TimeoutError, OSError) as e:
-                # Strategy 3: network-level errors -> backoff
+                # 策略 3：网络层错误 -> 退避
                 if attempt < MAX_RECOVERY_ATTEMPTS:
                     delay = backoff_delay(attempt)
                     print(f"[Recovery] Connection error: {e}. "
@@ -249,7 +249,7 @@ def agent_loop(messages: list):
 
         messages.append({"role": "assistant", "content": response.content})
 
-        # -- Strategy 1: max_tokens recovery --
+        # -- 策略 1：max_tokens 恢复 --
         if response.stop_reason == "max_tokens":
             max_output_recovery_count += 1
             if max_output_recovery_count <= MAX_RECOVERY_ATTEMPTS:
@@ -257,20 +257,20 @@ def agent_loop(messages: list):
                       f"({max_output_recovery_count}/{MAX_RECOVERY_ATTEMPTS}). "
                       "Injecting continuation...")
                 messages.append({"role": "user", "content": CONTINUATION_MESSAGE})
-                continue  # retry the loop
+                continue  # 重试循环
             else:
                 print(f"[Error] max_tokens recovery exhausted "
                       f"({MAX_RECOVERY_ATTEMPTS} attempts). Stopping.")
                 return
 
-        # Reset max_tokens counter on successful non-max_tokens response
+        # 非 max_tokens 的成功响应时重置计数器
         max_output_recovery_count = 0
 
-        # -- Normal end_turn: no tool use requested --
+        # -- 正常 end_turn：未请求工具调用 --
         if response.stop_reason != "tool_use":
             return
 
-        # -- Process tool calls --
+        # -- 处理工具调用 --
         results = []
         for block in response.content:
             if block.type != "tool_use":
@@ -289,7 +289,7 @@ def agent_loop(messages: list):
 
         messages.append({"role": "user", "content": results})
 
-        # Check if we should auto-compact (proactive, not just reactive)
+        # 检查是否需要主动 auto_compact（主动式，不仅是被动式）
         if estimate_tokens(messages) > TOKEN_THRESHOLD:
             print("[Recovery] Token estimate exceeds threshold. Auto-compacting...")
             messages[:] = auto_compact(messages)

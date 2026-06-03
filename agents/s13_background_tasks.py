@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-# Harness: background execution -- the model thinks while the harness waits.
+# 线束机制：后台执行 -- 模型思考时线束在等待
 """
-s13_background_tasks.py - Background Tasks
+s13_background_tasks.py - 后台任务
 
-Run slow commands in background threads. Before each LLM call, the loop
-drains a notification queue and hands finished results back to the model.
+在后台线程中运行耗时命令。每次 LLM 调用前，循环会排空通知队列，
+把已完成的结果交还给模型。
 
     Main thread                Background thread
     +-----------------+        +-----------------+
@@ -22,8 +22,7 @@ drains a notification queue and hands finished results back to the model.
                  |              |
                  +-- notification queue --> [results injected]
 
-Background tasks here are runtime execution slots, not the durable task-board
-records introduced in s12.
+此处的后台任务是运行时执行槽位，不是 s12 引入的持久化任务板记录。
 """
 
 import os
@@ -50,46 +49,45 @@ MODEL = os.environ["MODEL_ID"]
 
 SYSTEM = f"You are a coding agent at {WORKDIR}. Use background_run for long-running commands."
 
-STALL_THRESHOLD_S = 45  # seconds before a task is considered stalled
+STALL_THRESHOLD_S = 45  # 超过此秒数视为任务停滞
 
 
 class NotificationQueue:
     """
-    Priority-based notification queue with same-key folding.
+    基于优先级的通知队列，支持同 key 折叠。
 
-    Folding means a newer message can replace an older message with the
-    same key, so the context is not flooded with stale updates.
+    折叠指新消息可以替换同 key 的旧消息，避免上下文被过时更新淹没。
     """
 
     PRIORITIES = {"immediate": 0, "high": 1, "medium": 2, "low": 3}
 
     def __init__(self):
-        self._queue = []  # list of (priority, key, message)
+        self._queue = []  # 列表元素为 (priority, key, message)
         self._lock = threading.Lock()
 
     def push(self, message: str, priority: str = "medium", key: str = None):
-        """Add a message to the queue, folding if key matches an existing entry."""
+        """向队列添加消息，如果 key 匹配已有条目则折叠替换。"""
         with self._lock:
             if key:
-                # Fold: replace existing message with same key
+                # 折叠：替换同 key 的已有消息
                 self._queue = [(p, k, m) for p, k, m in self._queue if k != key]
             self._queue.append((self.PRIORITIES.get(priority, 2), key, message))
             self._queue.sort(key=lambda x: x[0])
 
     def drain(self) -> list[str]:
-        """Return all pending messages in priority order and clear the queue."""
+        """按优先级顺序返回所有待处理消息并清空队列。"""
         with self._lock:
             messages = [m for _, _, m in self._queue]
             self._queue.clear()
             return messages
 
 
-# -- BackgroundManager: threaded execution + notification queue --
+# -- BackgroundManager：线程执行 + 通知队列 --
 class BackgroundManager:
     def __init__(self):
         self.dir = RUNTIME_DIR
         self.tasks = {}  # task_id -> {status, result, command, started_at}
-        self._notification_queue = []  # completed task results
+        self._notification_queue = []  # 已完成任务的结果
         self._lock = threading.Lock()
 
     def _record_path(self, task_id: str) -> Path:
@@ -109,7 +107,7 @@ class BackgroundManager:
         return compact[:limit]
 
     def run(self, command: str) -> str:
-        """Start a background thread, return task_id immediately."""
+        """启动后台线程，立即返回 task_id。"""
         task_id = str(uuid.uuid4())[:8]
         output_file = self._output_path(task_id)
         self.tasks[task_id] = {
@@ -133,7 +131,7 @@ class BackgroundManager:
         )
 
     def _execute(self, task_id: str, command: str):
-        """Thread target: run subprocess, capture output, push to queue."""
+        """线程目标函数：运行子进程，捕获输出，推入队列。"""
         try:
             r = subprocess.run(
                 command, shell=True, cwd=WORKDIR,
@@ -166,7 +164,7 @@ class BackgroundManager:
             })
 
     def check(self, task_id: str = None) -> str:
-        """Check status of one task or list all."""
+        """检查单个任务状态或列出所有任务。"""
         if task_id:
             t = self.tasks.get(task_id)
             if not t:
@@ -188,7 +186,7 @@ class BackgroundManager:
         return "\n".join(lines) if lines else "No background tasks."
 
     def drain_notifications(self) -> list:
-        """Return and clear all pending completion notifications."""
+        """返回并清除所有待处理的完成通知。"""
         with self._lock:
             notifs = list(self._notification_queue)
             self._notification_queue.clear()
@@ -196,7 +194,7 @@ class BackgroundManager:
 
     def detect_stalled(self) -> list[str]:
         """
-        Return task IDs that have been running longer than STALL_THRESHOLD_S.
+        返回运行时间超过 STALL_THRESHOLD_S 的任务 ID。
         """
         now = time.time()
         stalled = []
@@ -212,7 +210,7 @@ class BackgroundManager:
 BG = BackgroundManager()
 
 
-# -- Tool implementations --
+# -- 工具实现 --
 def safe_path(p: str) -> Path:
     path = (WORKDIR / p).resolve()
     if not path.is_relative_to(WORKDIR):
@@ -288,8 +286,7 @@ TOOLS = [
 
 def agent_loop(messages: list):
     while True:
-        # Drain background notifications and inject as a synthetic user/assistant
-        # transcript pair before the next model call (teaching demo behavior).
+        # 排空后台通知，在下次模型调用前注入为合成的 user/assistant 对话对（教学演示行为）
         notifs = BG.drain_notifications()
         if notifs and messages:
             notif_text = "\n".join(

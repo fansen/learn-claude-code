@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
-# Harness: extensibility -- injecting behavior without touching the loop.
+# 线束：可扩展性 -- 在不修改循环的情况下注入行为。
 """
-s08_hook_system.py - Hook System
+s08_hook_system.py - Hook 系统
 
-Hooks are extension points around the main loop.
-They let readers add behavior without rewriting the loop itself.
+Hook 是主循环周围的扩展点。
+它们让读者可以在不重写循环本身的情况下添加行为。
 
-Teaching version:
+教学版事件：
   - SessionStart
   - PreToolUse
   - PostToolUse
 
-Teaching exit-code contract:
-  - 0 -> continue
-  - 1 -> block
-  - 2 -> inject a message
+教学版退出码契约：
+  - 0 -> 继续
+  - 1 -> 阻止
+  - 2 -> 注入消息
 
-This is intentionally simpler than a production system. The goal here is to
-teach the extension pattern clearly before introducing event-specific edge
-cases.
+这有意比生产系统更简单。目标是在引入事件特定的边界情况之前，
+先清晰地教会扩展模式。
 
-Key insight: "Extend the agent without touching the loop."
+核心洞察："不修改循环，扩展 agent。"
 """
 
 import json
@@ -40,27 +39,26 @@ WORKDIR = Path.cwd()
 client = Anthropic(base_url=os.getenv("ANTHROPIC_BASE_URL"))
 MODEL = os.environ["MODEL_ID"]
 
-# The teaching version keeps only the three clearest events. More complete
-# systems can grow the event surface later.
+# 教学版只保留三个最清晰的事件。更完整的系统可以后续扩展事件面。
 
 HOOK_EVENTS = ("PreToolUse", "PostToolUse", "SessionStart")
-HOOK_TIMEOUT = 30  # seconds
-# Real CC timeouts:
-#   TOOL_HOOK_EXECUTION_TIMEOUT_MS = 600000 (10 minutes for tool hooks)
-#   SESSION_END_HOOK_TIMEOUT_MS = 1500 (1.5 seconds for SessionEnd hooks)
+HOOK_TIMEOUT = 30  # 秒
+# 真实 CC 的超时配置：
+#   TOOL_HOOK_EXECUTION_TIMEOUT_MS = 600000（工具 hook 10 分钟）
+#   SESSION_END_HOOK_TIMEOUT_MS = 1500（SessionEnd hook 1.5 秒）
 
-# Workspace trust marker. Hooks only run if this file exists (or SDK mode).
+# 工作区信任标记文件。Hook 仅在此文件存在（或 SDK 模式下）时运行。
 TRUST_MARKER = WORKDIR / ".claude" / ".claude_trusted"
 
 
 class HookManager:
     """
-    Load and execute hooks from .hooks.json configuration.
+    从 .hooks.json 配置加载并执行 hook。
 
-    The hook manager does three simple jobs:
-    - load hook definitions
-    - run matching commands for an event
-    - aggregate block / message results for the caller
+    Hook 管理器做三件简单的事：
+    - 加载 hook 定义
+    - 为事件运行匹配的命令
+    - 聚合阻止/消息结果返回给调用方
     """
 
     def __init__(self, config_path: Path = None, sdk_mode: bool = False):
@@ -78,10 +76,10 @@ class HookManager:
 
     def _check_workspace_trust(self) -> bool:
         """
-        Check whether the current workspace is trusted.
+        检查当前工作区是否受信任。
 
-        The teaching version uses a simple trust marker file.
-        In SDK mode, trust is treated as implicit.
+        教学版使用简单的信任标记文件。
+        在 SDK 模式下，信任被视为隐式的。
         """
         if self._sdk_mode:
             return True
@@ -89,22 +87,22 @@ class HookManager:
 
     def run_hooks(self, event: str, context: dict = None) -> dict:
         """
-        Execute all hooks for an event.
+        执行某个事件的所有 hook。
 
-        Returns: {"blocked": bool, "messages": list[str]}
-          - blocked: True if any hook returned exit code 1
-          - messages: stderr content from exit-code-2 hooks (to inject)
+        返回: {"blocked": bool, "messages": list[str]}
+          - blocked: 如果任何 hook 返回退出码 1 则为 True
+          - messages: 退出码 2 的 hook 的 stderr 内容（用于注入）
         """
         result = {"blocked": False, "messages": []}
 
-        # Trust gate: refuse to run hooks in untrusted workspaces
+        # 信任门：拒绝在不受信任的工作区中运行 hook
         if not self._check_workspace_trust():
             return result
 
         hooks = self.hooks.get(event, [])
 
         for hook_def in hooks:
-            # Check matcher (tool name filter for PreToolUse/PostToolUse)
+            # 检查 matcher（PreToolUse/PostToolUse 的工具名过滤器）
             matcher = hook_def.get("matcher")
             if matcher and context:
                 tool_name = context.get("tool_name", "")
@@ -115,7 +113,7 @@ class HookManager:
             if not command:
                 continue
 
-            # Build environment with hook context
+            # 构建带 hook 上下文的环境变量
             env = dict(os.environ)
             if context:
                 env["HOOK_EVENT"] = event
@@ -133,12 +131,12 @@ class HookManager:
                 )
 
                 if r.returncode == 0:
-                    # Continue silently
+                    # 静默继续
                     if r.stdout.strip():
                         print(f"  [hook:{event}] {r.stdout.strip()[:100]}")
 
-                    # Optional structured stdout: small extension point that
-                    # keeps the teaching contract simple.
+                    # 可选的结构化 stdout：一个小扩展点，
+                    # 在保持教学契约简单的同时提供额外能力。
                     try:
                         hook_output = json.loads(r.stdout)
                         if "updatedInput" in hook_output and context:
@@ -150,17 +148,17 @@ class HookManager:
                             result["permission_override"] = (
                                 hook_output["permissionDecision"])
                     except (json.JSONDecodeError, TypeError):
-                        pass  # stdout was not JSON -- normal for simple hooks
+                        pass  # stdout 不是 JSON —— 简单 hook 的正常情况
 
                 elif r.returncode == 1:
-                    # Block execution
+                    # 阻止执行
                     result["blocked"] = True
                     reason = r.stderr.strip() or "Blocked by hook"
                     result["block_reason"] = reason
                     print(f"  [hook:{event}] BLOCKED: {reason[:200]}")
 
                 elif r.returncode == 2:
-                    # Inject message
+                    # 注入消息
                     msg = r.stderr.strip()
                     if msg:
                         result["messages"].append(msg)
@@ -174,7 +172,7 @@ class HookManager:
         return result
 
 
-# -- Tool implementations (same as s02) --
+# -- 工具实现（与 s02 相同）--
 def safe_path(p: str) -> Path:
     path = (WORKDIR / p).resolve()
     if not path.is_relative_to(WORKDIR):
@@ -250,10 +248,10 @@ SYSTEM = f"You are a coding agent at {WORKDIR}. Use tools to solve tasks."
 
 def agent_loop(messages: list, hooks: HookManager):
     """
-    The hook-aware agent loop.
+    带 hook 感知的 agent 循环。
 
-    The teaching version keeps only the clearest integration points:
-    SessionStart, PreToolUse, execute tool, PostToolUse.
+    教学版只保留最清晰的集成点：
+    SessionStart、PreToolUse、执行工具、PostToolUse。
     """
     while True:
         response = client.messages.create(
@@ -273,10 +271,10 @@ def agent_loop(messages: list, hooks: HookManager):
             tool_input = dict(block.input or {})
             ctx = {"tool_name": block.name, "tool_input": tool_input}
 
-            # -- PreToolUse hooks --
+            # -- PreToolUse hook --
             pre_result = hooks.run_hooks("PreToolUse", ctx)
 
-            # Inject hook messages into results
+            # 将 hook 消息注入到结果中
             for msg in pre_result.get("messages", []):
                 results.append({
                     "type": "tool_result", "tool_use_id": block.id,
@@ -292,7 +290,7 @@ def agent_loop(messages: list, hooks: HookManager):
                 })
                 continue
 
-            # -- Execute tool --
+            # -- 执行工具 --
             handler = TOOL_HANDLERS.get(block.name)
             try:
                 output = handler(**tool_input) if handler else f"Unknown: {block.name}"
@@ -300,11 +298,11 @@ def agent_loop(messages: list, hooks: HookManager):
                 output = f"Error: {e}"
             print(f"> {block.name}: {str(output)[:200]}")
 
-            # -- PostToolUse hooks --
+            # -- PostToolUse hook --
             ctx["tool_output"] = output
             post_result = hooks.run_hooks("PostToolUse", ctx)
 
-            # Inject post-hook messages
+            # 注入 post-hook 消息
             for msg in post_result.get("messages", []):
                 output += f"\n[Hook note]: {msg}"
 
@@ -319,7 +317,7 @@ def agent_loop(messages: list, hooks: HookManager):
 if __name__ == "__main__":
     hooks = HookManager()
 
-    # Fire SessionStart hooks
+    # 触发 SessionStart hook
     hooks.run_hooks("SessionStart", {"tool_name": "", "tool_input": {}})
 
     history = []
