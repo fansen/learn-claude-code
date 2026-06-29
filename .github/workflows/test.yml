@@ -20,10 +20,10 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install anthropic python-dotenv pytest
+        run: pip install -r requirements.txt pytest
 
       - name: Run Python smoke tests
-        run: python -m pytest tests/test_agents_smoke.py -q
+        run: python -m pytest tests -q
 
   web-build:
     runs-on: ubuntu-latest
