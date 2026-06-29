@@ -221,10 +221,11 @@ if __name__ == "__main__":
             break
         history.append({"role": "user", "content": query})
         agent_loop(history)
+
         # 打印模型的最终文本回复
         response_content = history[-1]["content"]
         if isinstance(response_content, list):
             for block in response_content:
-                if hasattr(block, "text"):
-                    print(block.text)
+                if isinstance(block, dict) and block.get("type") == "text":
+                    print(block["text"])
         print()

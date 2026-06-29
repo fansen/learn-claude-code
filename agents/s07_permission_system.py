@@ -407,7 +407,15 @@ if __name__ == "__main__":
             continue
 
         history.append({"role": "user", "content": query})
-        agent_loop(history, perms)
+        turn_start = len(history) - 1
+        try:
+            agent_loop(history, perms)
+        except KeyboardInterrupt:
+            # Ctrl+C 中断当前回合：回滚整轮，避免留下 tool_use 缺 tool_result 的半截历史
+            del history[turn_start:]
+            print("\n  [中断] 已取消当前回合，回到提示符")
+            continue
+
         response_content = history[-1]["content"]
         if isinstance(response_content, list):
             for block in response_content:
