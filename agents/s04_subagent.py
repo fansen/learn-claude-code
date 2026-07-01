@@ -59,13 +59,20 @@ WORKDIR = Path.cwd()
 client = Anthropic(base_url=os.getenv("ANTHROPIC_BASE_URL"))
 MODEL = os.environ["MODEL_ID"]
 
+# 父 Agent 的系统提示词：鼓励它用 task 工具把探索/子任务派出去（保护自己的上下文）
 SYSTEM = f"You are a coding agent at {WORKDIR}. Use the task tool to delegate exploration or subtasks."
+# 子 Agent 的系统提示词（写死）：干完活后要"总结发现"——这句是让它只回摘要的关键。
+# 真实 CC 里子 Agent 的系统提示词来自 .claude/agents/*.md 定义（见下方 AgentTemplate）。
 SUBAGENT_SYSTEM = f"You are a coding subagent at {WORKDIR}. Complete the given task, then summarize your findings."
 
 
 class AgentTemplate:
     """
     从 Markdown frontmatter 解析 Agent 定义。
+
+    注意：这个类在教学版里定义了、但主流程没真正用它——是个"指路用"的扩展点
+    （和 s07 的 is_workspace_trusted 一样）。它告诉你：真实系统的子 Agent 是
+    「可配置定义」的，而教学版为简单直接硬编码了一个 SUBAGENT_SYSTEM。
 
     真实的 Claude Code 从 .claude/agents/*.md 加载 Agent 定义。
     frontmatter 字段：name, tools, disallowedTools, skills, hooks,
@@ -152,7 +159,9 @@ TOOL_HANDLERS = {
     "edit_file":  lambda **kw: run_edit(kw["path"], kw["old_text"], kw["new_text"]),
 }
 
-# 子 Agent 拥有所有基础工具，但没有 task 工具（防止递归创建子 Agent）
+# 子 Agent 的工具集：只有 bash/read/write/edit 四个基础工具，故意「不含 task 工具」。
+# 为什么？给了 task，子 Agent 就能再派孙 Agent，孙 Agent 再派…… 指数级/无限递归。
+# 教学版用最简单的办法防住：直接不给。（真实 CC 允许嵌套但有深度限制。）
 CHILD_TOOLS = [
     {"name": "bash", "description": "Run a shell command.",
      "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
@@ -167,27 +176,36 @@ CHILD_TOOLS = [
 
 # -- 子 Agent：全新上下文、过滤后的工具、仅返回摘要 --
 def run_subagent(prompt: str) -> str:
+    # 【隔离机制就是这一行】：一个全新的、跟父 Agent 完全无关的局部 messages 列表。
+    # 子 Agent 在里面折腾几十轮，函数返回时这个变量随栈销毁——没有 fork/沙箱/IPC，
+    # "上下文隔离"字面上就是"另起一个 messages 列表"。父 Agent 的 messages 毫发无损。
+    # 注意：这是同一个 Python 进程里的另一个列表（进程内隔离），且同步阻塞（不是真并行）。
     sub_messages = [{"role": "user", "content": prompt}]  # 全新上下文
-    for _ in range(30):  # 安全上限
+    for _ in range(30):  # 安全上限：防子 Agent 陷入"一直调工具、永不给最终答复"而回不来
         response = client.messages.create(
             model=MODEL, system=SUBAGENT_SYSTEM, messages=sub_messages,
-            tools=CHILD_TOOLS, max_tokens=8000,
+            tools=CHILD_TOOLS, max_tokens=8000,   # 用子 Agent 自己的 messages 和工具集
         )
+        # 所有中间过程都只进 sub_messages，绝不进父的 messages
         sub_messages.append({"role": "assistant", "content": response.content})
         if response.stop_reason != "tool_use":
             break
         results = []
         for block in response.content:
             if block.type == "tool_use":
+                # 工具用的是和父 Agent 共享的 TOOL_HANDLERS（同一个 WORKDIR）——
+                # 所以子 Agent 读写文件的副作用是真实的、父 Agent 之后能看到。共享文件系统。
                 handler = TOOL_HANDLERS.get(block.name)
                 output = handler(**block.input) if handler else f"Unknown tool: {block.name}"
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": str(output)[:50000]})
         sub_messages.append({"role": "user", "content": results})
-    # 只有最终文本返回给父 Agent -- 子 Agent 上下文被丢弃
+    # 【压缩】只把最终文本（摘要）返回给父 Agent——子 Agent 那几十轮的噪音上下文全丢弃。
+    # 几万 token 的探索 → 几百 token 的结论。
     return "".join(b.text for b in response.content if hasattr(b, "text")) or "(no summary)"
 
 
 # -- 父 Agent 工具：基础工具 + task 分发器 --
+# 父比子多一个 task 工具（子没有，防递归）。这就是父子唯一的工具差别。
 PARENT_TOOLS = CHILD_TOOLS + [
     {"name": "task", "description": "Spawn a subagent with fresh context. It shares the filesystem but not conversation history.",
      "input_schema": {"type": "object", "properties": {"prompt": {"type": "string"}, "description": {"type": "string", "description": "Short description of the task"}}, "required": ["prompt"]}},
@@ -207,6 +225,7 @@ def agent_loop(messages: list):
         for block in response.content:
             if block.type == "tool_use":
                 if block.name == "task":
+                    # 派子 Agent：同步跑 run_subagent，拿回一段摘要字符串
                     desc = block.input.get("description", "subtask")
                     prompt = block.input.get("prompt", "")
                     print(f"> task ({desc}): {prompt[:80]}")
@@ -214,6 +233,8 @@ def agent_loop(messages: list):
                 else:
                     handler = TOOL_HANDLERS.get(block.name)
                     output = handler(**block.input) if handler else f"Unknown tool: {block.name}"
+                # 【对父透明】不管是 task 还是 bash，结果都当成普通 tool_result 塞回父的对话。
+                # 父 Agent 分不清这个字符串背后是"跑了个命令"还是"另一个 Agent 烧了 30 轮"。
                 print(f"  {str(output)[:200]}")
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": str(output)})
         messages.append({"role": "user", "content": results})
@@ -230,6 +251,7 @@ if __name__ == "__main__":
             break
         history.append({"role": "user", "content": query})
         agent_loop(history)
+
         response_content = history[-1]["content"]
         if isinstance(response_content, list):
             for block in response_content:
