@@ -3,9 +3,24 @@
 """
 s03_todo_write.py - 会话规划（TodoWrite）
 
-本章讲的是轻量级的会话计划，不是持久化的任务图。
-模型可以重写当前计划、聚焦一个进行中的步骤，
-如果连续多轮没有刷新计划，harness 会提醒它。
+【本节在 s02 基础上加了什么】
+  循环没变，只多注册了一个 todo 工具（TOOL_HANDLERS 加一行），外加一个提醒机制。
+  共享样板（SDK / .env / safe_path / 工具实现）见 s01，本文件不再重复。
+
+【解决什么问题】
+  模型是无状态的：每轮它靠"重读整段对话"来重建"我做到哪了"。上下文越长，注意力越
+  被冲散，越容易漂移、忘步骤、跑偏最初目标。TodoWrite 把计划外化成结构化数据，
+  从「靠模型记」变成「代码存 + 代码管」——核心洞察是：
+      把当前会话计划放在模型脑子外面（keep the plan outside the model's head）。
+
+【两个关键设计】
+  1. 全量重写：模型每次发完整计划，harness 无脑覆盖旧的（不是增量改某一项）。
+     好处是模型每轮声明"完整真相"，harness 存的状态和模型以为的状态永不失同步。
+  2. 提醒机制（nudge）：模型可能开了计划后闷头干活、忘了更新。harness 数着"连续
+     几轮没碰 todo"，超过阈值就往对话里夹一句 <reminder> 轻推它刷新（不硬控）。
+
+【边界】
+  这是「会话内、临时、内存」的轻量计划；跨会话、落盘、带依赖的持久任务图是 s12 的事。
 """
 
 import os
@@ -24,9 +39,11 @@ if os.getenv("ANTHROPIC_BASE_URL"):
 WORKDIR = Path.cwd()
 client = Anthropic(base_url=os.getenv("ANTHROPIC_BASE_URL"))
 MODEL = os.environ["MODEL_ID"]
-# 连续多少轮没更新计划就触发提醒
+# 连续多少轮没更新计划就触发提醒（提醒机制的阈值）
 PLAN_REMINDER_INTERVAL = 3
 
+# 系统提示词里明确要求模型：多步任务用 todo、同时只保持一个 in_progress、随进度刷新。
+# 但"要求"只是软约束——真正的硬约束在 TodoManager.update 里用代码强制（见下）。
 SYSTEM = f"""You are a coding agent at {WORKDIR}.
 Use the todo tool for multi-step work.
 Keep exactly one step in_progress when a task has multiple steps.
@@ -38,14 +55,14 @@ class PlanItem:
     """计划中的单个步骤。"""
     content: str                    # 步骤描述
     status: str = "pending"         # pending / in_progress / completed
-    active_form: str = ""           # 进行中时的现在进行时标签（可选）
+    active_form: str = ""           # 进行中时的现在进行时标签（可选，仅为渲染可读性）
 
 
 @dataclass
 class PlanningState:
-    """计划的整体状态。"""
+    """计划的整体状态（就是被"外部化"存起来、独立于模型记忆的那份状态）。"""
     items: list[PlanItem] = field(default_factory=list)
-    rounds_since_update: int = 0    # 距离上次更新计划过了多少轮
+    rounds_since_update: int = 0    # 距上次更新计划过了几轮——提醒机制的计数器
 
 
 class TodoManager:
@@ -55,7 +72,14 @@ class TodoManager:
         self.state = PlanningState()
 
     def update(self, items: list) -> str:
-        """用新的计划项列表完整替换当前计划（全量覆盖，不是增量）。"""
+        """用新的计划项列表完整替换当前计划（全量覆盖，不是增量）。
+
+        为什么全量覆盖？模型无状态。增量式（"标记第2项完成"）要求模型记的状态和
+        这里存的状态时刻同步，一旦数错/顺序不一致就错标。全量覆盖下模型每次声明
+        "完整真相"，这里无脑替换，两边永不失同步。
+        下面三个 raise 就是把"要短/content必填/status合法/只能一个in_progress"
+        这些约束用代码强制——模型守不住的规则，交给外部代码守。
+        """
         if len(items) > 12:
             raise ValueError("Keep the session plan short (max 12 items)")
 
@@ -79,20 +103,27 @@ class TodoManager:
                 active_form=active_form,
             ))
 
-        # 同一时间只能有一个步骤处于进行中
+        # 不变量：同一时间只能有一个步骤 in_progress。
+        # 为什么？① 给模型专注纪律（同时干多件事会分散注意力）；② 给人可读性
+        #（任何时刻看列表都能一眼知道"当前在做哪一步"）。
         if in_progress_count > 1:
             raise ValueError("Only one plan item can be in_progress")
 
-        self.state.items = normalized
-        self.state.rounds_since_update = 0
-        return self.render()
+        self.state.items = normalized       # 全量替换
+        self.state.rounds_since_update = 0  # 刚更新过，计数清零
+        return self.render()                # 返回渲染文本，作为 tool_result 让模型看到现状
 
     def note_round_without_update(self) -> None:
         """记录一轮没有更新计划。"""
         self.state.rounds_since_update += 1
 
     def reminder(self) -> str | None:
-        """如果连续多轮没刷新计划，返回提醒文本；否则返回 None。"""
+        """如果连续多轮没刷新计划，返回提醒文本；否则返回 None。
+
+        触发要同时满足两个条件：
+          ① 计划非空——空计划=任务简单到没建列表，这时催"刷新"既没意义又很吵。
+          ② rounds_since_update >= 阈值(3)——连续 3 轮没碰 todo 才算"该催了"。
+        """
         if not self.state.items:
             return None
         if self.state.rounds_since_update < PLAN_REMINDER_INTERVAL:
@@ -188,12 +219,13 @@ def run_edit(path: str, old_text: str, new_text: str) -> str:
         return f"Error: {exc}"
 
 
-# 工具分发表
+# 工具分发表。todo 的接入方式和 s02 加任何工具完全一样——加一行，循环不用改。
 TOOL_HANDLERS = {
     "bash": lambda **kw: run_bash(kw["command"]),
     "read_file": lambda **kw: run_read(kw["path"], kw.get("limit")),
     "write_file": lambda **kw: run_write(kw["path"], kw["content"]),
     "edit_file": lambda **kw: run_edit(kw["path"], kw["old_text"], kw["new_text"]),
+    # todo 工具：把模型传来的完整计划交给 TodoManager 全量覆盖，返回渲染文本
     "todo": lambda **kw: TODO.update(kw["items"]),
 }
 
@@ -304,7 +336,7 @@ def agent_loop(messages: list) -> None:
             return
 
         results = []
-        used_todo = False
+        used_todo = False  # 标记这一轮模型有没有调用 todo 工具（提醒机制要用）
         for block in response.content:
             if block.type != "tool_use":
                 continue
@@ -324,14 +356,17 @@ def agent_loop(messages: list) -> None:
             if block.name == "todo":
                 used_todo = True
 
-        # 计划提醒逻辑：如果这轮没用 todo 工具，累计轮次；超过阈值就插入提醒
+        # 计划提醒逻辑（nudge）：
+        #   用了 todo → 计数清零；没用 → 计数 +1，再问 reminder() 该不该催。
         if used_todo:
             TODO.state.rounds_since_update = 0
         else:
             TODO.note_round_without_update()
             reminder = TODO.reminder()
             if reminder:
-                # 把提醒插到 tool_result 前面，让模型先看到提醒
+                # 插到 results 最前面：content 块按顺序读，插最前模型先撞见提醒，
+                # 不会被后面一大坨 tool_result 淹没。注意这是一个 {"type":"text"} 块，
+                # 和其它 {"type":"tool_result"} 块混在同一条 user 消息里——API 允许混装。
                 results.insert(0, {"type": "text", "text": reminder})
 
         messages.append({"role": "user", "content": results})
